@@ -1,8 +1,8 @@
-## Interface: 120100
-## Title: |cff11ace9Buzzard Frames|r
-## Notes: Blizzard-style Party, Raid and Unit Frames
+## Interface: 16001
+## Title: |cff11ace9Buzzard Frames|r Forever
+## Notes: Blizzard-style Party, Raid and Unit Frames for World of Warcraft: Forever
 ## Author: Serina
-## Version: 5.3.2
+## Version: 5.3.2-forever
 ## SavedVariables: BuzzardFramesDB, BuzzardFramesUnitFramesDB, BuzzardFramesAuraCustomizationsDB, BuzzardFramesCustomFrameGroupsDB, BuzzardFramesRaidPartyFramesDB, BuzzardFramesIncomingCastsDB, BuzzardFramesMenuModeDB
 ## X-oUF: BuzzardFrames_oUF
 ## X-Curse-Project-ID: 1461828

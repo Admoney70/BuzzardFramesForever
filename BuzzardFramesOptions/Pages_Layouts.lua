@@ -382,7 +382,7 @@ function PAGES.management()
                 -- Ace: createFlatType.
                 { control = "dropdown", label = "Type",
                   desc = "Party Layouts are used for 5-player groups (Solo, "
-                      .. "Party, Dungeon, Delve, Arena). Raid Layouts are used "
+                      .. "Party, Dungeon, Arena). Raid Layouts are used "
                       .. "for raid groups and battlegrounds.",
                   options = { { value = "party", text = "Party" },
                               { value = "raid",  text = "Raid"  } },
@@ -726,11 +726,10 @@ local function GlobalSlotCards()
         }},
         { title = "Dungeon", preset = "form", fields = {
             SlotAssignField("dungeon", "Dungeon", "Layout used when you are in a 5-player dungeon or party."),
-            SlotAssignField("delve",   "Delve",   "Layout used when you are in a Delve."),
         }},
         { title = "Raid", preset = "form", fields = {
             SlotAssignField("raid20", "Raid (20 Man)", "Layout used when you are in a 20-player raid instance."),
-            SlotAssignField("raid25", "Raid (25 Man)", "Layout used when you are in a 25-player raid instance, such as Mythic Flex."),
+            SlotAssignField("raid25", "Raid (25 Man)", "Layout used when you are in a 25-player raid instance."),
             SlotAssignField("raid30", "Raid (30 Man)", "Layout used when you are in a 30-player raid instance."),
             SlotAssignField("raid40", "Raid (40 Man)", "Layout used when you are in a 40-player raid instance."),
         }},
@@ -905,7 +904,6 @@ local function RoleSpecMemberPage(mctx)
         }},
         { title = "Dungeon", preset = "form", fields = {
             Slot("dungeon", "Dungeon"),
-            Slot("delve",   "Delve"),
         }},
         { title = "Raid", preset = "form", fields = {
             Slot("raid20", "Raid (20 Man)"),

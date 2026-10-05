@@ -2639,7 +2639,7 @@ local function BluzzardStyle(self, unit)
                     -- Master Name-Bar-Text switch gates Level visibility.
                     local showLevel = (uf2.showNameBarText ~= false) and (uf2.showLevel ~= false)
                     if showLevel and uf2.hideLevelAtMax and ufKey == "player" then
-                        local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 80
+                        local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 60
                         if level and level >= maxLevel then showLevel = false end
                     end
                     frame.Level:SetShown(showLevel)
@@ -3392,7 +3392,7 @@ function BF:_ApplyOUFNameBarTextPositions(frame, unitKey)
         local show = nameTextMaster and (uf.showLevel ~= false)
         -- Hide at max level (player frame only)
         if show and uf.hideLevelAtMax and unitKey == "player" then
-            local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 80
+            local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 60
             local playerLevel = UnitLevel("player")
             if playerLevel and playerLevel >= maxLevel then
                 show = false

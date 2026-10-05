@@ -266,12 +266,12 @@ function BF.GetClassRaidBuffIDs()
 end
 
 -- Returns the spell ID to pass to GetUnitAuraBySpellID for the given unit,
--- based on the player's class raid buff. Handles Evoker's per-class variants.
--- Returns nil if the player class has no raid buff or the unit class is unknown.
-function BF.GetRaidBuffLookupID(unit)
+-- based on the player's class raid buff. Every Forever raid buff is a single
+-- spell ID, so the unit does not change the answer.
+-- Returns nil if the player class has no raid buff.
+function BF.GetRaidBuffLookupID(_unit)
     local playerClass = UnitClassBase and UnitClassBase("player")
     local classBuff   = playerClass and BF.CLASS_RAID_BUFF[playerClass]
-    if not classBuff then return nil end
     if type(classBuff) == "number" then
         return classBuff
     end
@@ -4440,7 +4440,7 @@ local function EnsureBuffsPresetsSeeded(p)
         p._buffsPresetsSeededV65 = nil
     end
 
-    -- Seed 2 (2026-08-15): healers and Augmentation default to the "none"
+    -- Seed 2 (2026-08-15): healers default to the "none"
     -- preset, which makes the Whitelist the source of truth for those specs.
     --
     -- This replaces the retired per-spec filter key. That key stored a Filter
@@ -4450,9 +4450,9 @@ local function EnsureBuffsPresetsSeeded(p)
     -- intent for every one of those specs, through the mechanism that is
     -- actually still read.
     --
-    -- TWO entries, not nine (owner decision): the HEALER role override covers
-    -- all seven healer specs, and Augmentation Evoker needs its own spec
-    -- override because its role is DAMAGER, so the role arm never sees it.
+    -- ONE entry (Forever: the retail Augmentation Evoker spec override is
+    -- gone with the class): the HEALER role override covers every healer
+    -- spec.
     -- Known gap, accepted: ResolveBuffsPreset resolves the role from
     -- UnitGroupRolesAssigned("player") (falling back to the spec's own role),
     -- so a healer ASSIGNED to a DPS slot in a group falls through the role

@@ -1,6 +1,6 @@
-## Interface: 120100
-## Title: |cff11ace9Buzzard Frames|r Options
-## Notes: The new options panel for Buzzard Frames. Loads on demand, the first time options are opened.
+## Interface: 16001
+## Title: |cff11ace9Buzzard Frames|r Forever Options
+## Notes: The options panel for Buzzard Frames Forever. Loads on demand, the first time options are opened.
 ## Author: Serina
 ## Version: 1.0
 ## X-Category: UI

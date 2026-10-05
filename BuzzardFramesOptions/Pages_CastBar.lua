@@ -313,17 +313,6 @@ local function Sl(bind, label, lo, hi, st, opts)
     return f
 end
 
--- A stepper, not a slider: a handful of whole numbers, where the reader
--- wants "one more" rather than a position on a track, and the number can be
--- typed directly. Same arguments as Sl, so a field converts by its name.
-local function St(bind, label, lo, hi, st, opts)
-    local f = { control = "stepper", label = label, bind = bind,
-                min = lo, max = hi, step = st,
-                onChange = Refresh, disabled = "combat" }
-    for k, v in pairs(opts or {}) do f[k] = v end
-    return f
-end
-
 local function Dd(bind, label, options, opts)
     local f = { control = "dropdown", label = label, bind = bind,
                 options = options,

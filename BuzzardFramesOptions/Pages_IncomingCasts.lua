@@ -1115,8 +1115,7 @@ function BuzzardFramesOptions:IncomingCastsPage()
                 { control = "note", wide = true,
                   text = "Show incoming enemy casts targeting you. Tracks "
                       .. "nameplate enemies and displays cast bars or icons.\n\n"
-                      .. "|cffffd100This feature only works in Dungeons and "
-                      .. "Delves.|r" },
+                      .. "|cffffd100This feature only works in Dungeons.|r" },
             }},
             { title = "Incoming Casts", preset = "form", fields = {
                 { control = "switch", label = "Enable Incoming Casts",

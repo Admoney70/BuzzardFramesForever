@@ -30,9 +30,13 @@ local IsInRaid                = IsInRaid
 -- AddPrivateAuraAnchor work in combat. Grid2's Overlay_Update /
 -- Overlay_Layout have no InCombatLockdown guards.
 
--- 12.0.5+ supports isContainer in AddPrivateAuraAnchor args.
+-- 12.0.5+ supports isContainer in AddPrivateAuraAnchor args. WoW Forever
+-- runs the 12.1.x API but reports its own interface number (16001), so a
+-- plain ">= 120005" would wrongly read as unsupported there.
 local CLIENT_VERSION = select(4, GetBuildInfo())
-local IS_CONTAINER_SUPPORTED = CLIENT_VERSION >= 120005
+local IS_FOREVER_CLIENT = (WOW_PROJECT_CAMELOT ~= nil and WOW_PROJECT_ID == WOW_PROJECT_CAMELOT)
+    or (CLIENT_VERSION >= 16000 and CLIENT_VERSION < 20000)
+local IS_CONTAINER_SUPPORTED = IS_FOREVER_CLIENT or CLIENT_VERSION >= 120005
 
 -- ============================================================
 -- DEBUG INSTRUMENTATION

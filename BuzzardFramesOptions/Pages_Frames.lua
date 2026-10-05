@@ -776,8 +776,7 @@ local function RaidGroupsCard()
         id = "autoHideGroupsByInstance", wide = true,
         default = d and d.autoHideGroupsByInstance,
         desc = "Hides raid groups based on the max players that can fit "
-            .. "in the current instance: Hides groups 7-8 in a 30-man "
-            .. "raid, 6-8 in a 25-man Mythic Flex raid, 5-8 in a 20-man "
+            .. "in the current instance: Hides groups 5-8 in a 20-man "
             .. "raid. All 8 groups are shown in Open world and 40-man "
             .. "raids.",
         disabled = "combat",

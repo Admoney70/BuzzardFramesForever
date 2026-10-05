@@ -38,7 +38,6 @@ local pairs = pairs
 local canaccessvalue = canaccessvalue or function() return true  end
 
 local UnitExists             = UnitExists
-local UnitClass              = UnitClass
 -- v67: local UnitIsVisible removed — its only reader was
 -- ClearBuffHighlightForNonVisibleUnits (deleted with buffHighlight).
 local UnitGroupRolesAssigned = UnitGroupRolesAssigned

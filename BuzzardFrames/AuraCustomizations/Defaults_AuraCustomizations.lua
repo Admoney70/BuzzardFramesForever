@@ -61,9 +61,9 @@ BF.auraCustomizationDefaults = {
         -- healerBuffFilter removed: it had no reader left.
         -- specBuffFilter removed 2026-08-15: v67 deleted its last reader when
         -- the Buffs preset system replaced per-spec Filter Modes. Its job is
-        -- now done by the seeded Buffs preset overrides -- HEALER role and
-        -- Augmentation Evoker both default to the "none" preset, which makes
-        -- the Whitelist the source of truth for those specs. See
+        -- now done by the seeded Buffs preset override -- the HEALER role
+        -- defaults to the "none" preset, which makes the Whitelist the source
+        -- of truth for those specs. See
         -- EnsureBuffsPresetsSeeded in AuraCustomizations.lua.
         -- nonHealerBuffFilter removed 2026-08-15 (v79): its last reader was the
         -- unreachable fallback in EnsureFetchBuffSettings, deleted along with
