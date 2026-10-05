@@ -4303,14 +4303,24 @@ BF.BUFFS_PRESETS = {
     none                = { name = "No Preset - Whitelist Only",         filter = nil },
     helpful_player      = { name = "Helpful | Player",                   filter = "HELPFUL|PLAYER" },
     player_raid         = { name = "Helpful | Player | Raid",            filter = "HELPFUL|PLAYER|RAID" },
-    player_raid_combat  = { name = "Helpful | Player | Raid_In_Combat",  filter = "HELPFUL|PLAYER|RAID_IN_COMBAT" },
     helpful_raid        = { name = "Helpful | Raid",                     filter = "HELPFUL|RAID" },
-    helpful_raid_combat = { name = "Helpful | Raid_In_Combat",           filter = "HELPFUL|RAID_IN_COMBAT" },
+    -- Forever: the RAID_IN_COMBAT token matches nothing there (the Classic-era
+    -- spell data does not carry the "show on raid frames in combat" flag), so
+    -- the two _combat presets are hidden from every list and filter like their
+    -- plain RAID twins. The keys stay so a saved value still resolves to
+    -- something that works; the Forever seed rewrites them anyway.
+    player_raid_combat  = { name = "Helpful | Player | Raid",            filter = "HELPFUL|PLAYER|RAID" },
+    helpful_raid_combat = { name = "Helpful | Raid",                     filter = "HELPFUL|RAID" },
 }
 BF.BUFFS_PRESET_ORDER = {
     "none",
-    "helpful_player", "player_raid", "player_raid_combat",
-    "helpful_raid", "helpful_raid_combat",
+    "helpful_player", "player_raid",
+    "helpful_raid",
+}
+-- Forever: retired preset key -> the key that replaces it.
+BF.BUFFS_PRESET_FOREVER_REMAP = {
+    player_raid_combat  = "player_raid",
+    helpful_raid_combat = "helpful_raid",
 }
 
 -- ── v65: ONE global preset, with ROLE and SPEC overrides ──────────────────
@@ -4333,11 +4343,10 @@ BF.BUFFS_PRESET_ORDER = {
 -- Exactly ONE preset applies at a time. That is the change from the earlier
 -- set-of-presets model: a filter is a single choice, and combining several was
 -- expressive but had no way to say "this one instead of that one on this spec".
--- Forever: plain HELPFUL|PLAYER. The retail default (player_raid_combat)
--- leans on the per-spell "show in raid frames in combat" flag, which the
--- Classic-era spell data Forever ships does not reliably carry, and that left
--- the buff row empty.
-BF.BUFFS_DEFAULT_PRESET = "helpful_player"
+-- Forever: HELPFUL|PLAYER|RAID. The retail default (player_raid_combat)
+-- relies on the RAID_IN_COMBAT token, which matches nothing on Forever and
+-- left the buff row empty.
+BF.BUFFS_DEFAULT_PRESET = "player_raid"
 
 function BF:GetBuffsGlobalPreset()
     local t = self:GetBuffsPresetContainer()
@@ -4483,12 +4492,43 @@ local function EnsureBuffsPresetsSeeded(p)
     -- picked themselves is left alone.
     if not p._buffsPresetsForever1 then
         p._buffsPresetsForever1 = true
-        if t.globalPreset == "player_raid_combat" then
-            t.globalPreset = BF.BUFFS_DEFAULT_PRESET
-        end
         local h = t.roleOverrides and t.roleOverrides.HEALER
         if type(h) == "table" and h.preset == "none" then
             t.roleOverrides.HEALER = nil
+        end
+    end
+
+    -- Forever seed 2 (own flag): move every retired RAID_IN_COMBAT preset onto
+    -- its plain RAID twin -- the global choice, role/spec overrides and the
+    -- preset sets of custom buff containers. "helpful_player", the previous
+    -- Forever default, also moves to the new default; a value the user picked
+    -- after this seed ran is never touched again.
+    if not p._buffsPresetsForever2 then
+        p._buffsPresetsForever2 = true
+        local remap = BF.BUFFS_PRESET_FOREVER_REMAP
+        if t.globalPreset == nil or t.globalPreset == "helpful_player"
+           or remap[t.globalPreset] then
+            t.globalPreset = BF.BUFFS_DEFAULT_PRESET
+        end
+        for _, tbl in ipairs({ t.roleOverrides or {}, t.specOverrides or {} }) do
+            for _, e in pairs(tbl) do
+                if type(e) == "table" and e.preset and remap[e.preset] then
+                    e.preset = remap[e.preset]
+                end
+            end
+        end
+        if type(p.customBuffContainers) == "table" then
+            for _, c in pairs(p.customBuffContainers) do
+                local set = type(c) == "table" and c.presets
+                if type(set) == "table" then
+                    for old, new in pairs(remap) do
+                        if set[old] ~= nil then
+                            if set[new] == nil then set[new] = set[old] end
+                            set[old] = nil
+                        end
+                    end
+                end
+            end
         end
     end
 end
