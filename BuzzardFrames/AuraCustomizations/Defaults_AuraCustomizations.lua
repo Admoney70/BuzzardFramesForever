@@ -77,9 +77,6 @@ BF.auraCustomizationDefaults = {
         -- ── Show/hide toggles ─────────────────────────────────────────────
         showSatedDebuffs     = false,
         showDeserterDebuffs  = true,
-        showSkyridingDebuffs = true,
-        showArcaneEmpowermentDebuffs = false,
-        showTimeTrialDebuffs         = false,
         showRaidBuffs        = false,
 
         -- ── Missing raid buff icons (MIGRATED to rpDB.profile.icons) ─────

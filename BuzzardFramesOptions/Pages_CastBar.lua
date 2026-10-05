@@ -741,20 +741,6 @@ function PAGES.appearance()
               end },
             Col("borderColor", "Border Color", true, { hidden = NoBorder }),
         }},
-        { title = "Empowered Casts", preset = "form", fields = {
-            -- empowerInfo, as a note: visible with the section (not gated
-            -- on the pips toggle), as in the Ace page.
-            { control = "note", wide = true, hidden = Off,
-              text = "Empowered casts (Evoker) fill toward a series of stages. "
-                  .. "These marks show where each stage lands on the bar.\n\n"
-                  .. "|cff888888The game does not tell addons which stage a cast is currently in, "
-                  .. "so the marks are fixed and cannot light up as the cast progresses.|r" },
-            Sw("showEmpowerPips", "Show Stage Marks", { hidden = Off }),
-            Col("pipColor", "Stage Mark Color", true,
-                { hidden = HiddenUnless("showEmpowerPips") }),
-            St("pipWidth", "Stage Mark Width", 1, 6, 1,
-               { hidden = HiddenUnless("showEmpowerPips") }),
-        }},
     }
 end
 

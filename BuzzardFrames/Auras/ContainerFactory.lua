@@ -5967,8 +5967,8 @@ end
 
 -- ============================================================
 -- v50 COMBAT-CONDITIONAL AURA FILTERING (Aura Customizations →
--- Aura Filtering). Long-term debuff categories (Sated / Deserter /
--- Skyriding / Arcane Empowerment / Time Trial): toggled OFF = never
+-- Aura Filtering). Long-term debuff categories (Sated / Deserter):
+-- toggled OFF = never
 -- shown (always excluded); toggled ON = shown OUT OF COMBAT only
 -- (excluded while in combat) — legacy injection parity. These are
 -- NeverSecret meta-debuffs, so harmful spellID excludes are honored.
@@ -5982,12 +5982,8 @@ function BF:GetLongTermDebuffExcludes(inCombat)
     local acp = BF.acDB and BF.acDB.profile
     local sated    = acp and acp.showSatedDebuffs or false
     local deserter = acp and acp.showDeserterDebuffs or false
-    local skyride  = acp and acp.showSkyridingDebuffs or false
-    local arcane   = acp and acp.showArcaneEmpowermentDebuffs or false
-    local trial    = acp and acp.showTimeTrialDebuffs or false
     local sig = (inCombat and "c" or "o")
-        .. (sated and 1 or 0) .. (deserter and 1 or 0) .. (skyride and 1 or 0)
-        .. (arcane and 1 or 0) .. (trial and 1 or 0)
+        .. (sated and 1 or 0) .. (deserter and 1 or 0)
     table.wipe(_ltdExcludes)
     local function addSet(set, shown)
         if not set then return end
@@ -5996,9 +5992,6 @@ function BF:GetLongTermDebuffExcludes(inCombat)
     end
     addSet(BF.SATED_SPELL_IDS,              sated)
     addSet(BF.DESERTER_SPELL_IDS,           deserter)
-    addSet(BF.SKYRIDING_SPELL_IDS,          skyride)
-    addSet(BF.ARCANE_EMPOWERMENT_SPELL_IDS, arcane)
-    addSet(BF.TIME_TRIAL_SPELL_IDS,         trial)
     return _ltdExcludes, sig
 end
 

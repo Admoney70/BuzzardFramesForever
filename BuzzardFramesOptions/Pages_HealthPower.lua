@@ -878,7 +878,6 @@ local function NoPowerBarsShown()
     local ip = GetIP()
     if not ip then return true end
     return not ip.showAllPowerBars and not ip.showPowerBarHealers
-        and not ip.showPowerBarBloodDK
 end
 
 -- The Ace powerTab, cards in its `order` (powerBarVisibilityGroup 16,
@@ -893,11 +892,6 @@ function PAGES.power()
                     .. "disabled, only the selected roles below will show "
                     .. "power bars." }),
             Sw("showPowerBarHealers", "Show Healer Power Bars", PowerBarsShown, {
-                hidden = function()
-                    local ip = GetIP()
-                    return ip and ip.showAllPowerBars
-                end }),
-            Sw("showPowerBarBloodDK", "Show Blood DK Power Bars", PowerBarsShown, {
                 hidden = function()
                     local ip = GetIP()
                     return ip and ip.showAllPowerBars

@@ -369,14 +369,10 @@ local CLASS_OPTIONS = {
     { value = "HUNTER",      text = "Hunter" },
     { value = "ROGUE",       text = "Rogue" },
     { value = "PRIEST",      text = "Priest" },
-    { value = "DEATHKNIGHT", text = "Death Knight" },
     { value = "SHAMAN",      text = "Shaman" },
     { value = "MAGE",        text = "Mage" },
     { value = "WARLOCK",     text = "Warlock" },
-    { value = "MONK",        text = "Monk" },
     { value = "DRUID",       text = "Druid" },
-    { value = "DEMONHUNTER", text = "Demon Hunter" },
-    { value = "EVOKER",      text = "Evoker" },
 }
 local ROLE_OPTIONS = {
     { value = "TANK",    text = "Tank" },

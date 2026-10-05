@@ -396,14 +396,6 @@ function BuzzardFramesOptions:ColorsPage()
                 PowerColor("rageColor",       "Rage",         "RAGE"),
                 PowerColor("focusColor",      "Focus",        "FOCUS"),
                 PowerColor("energyColor",     "Energy",       "ENERGY"),
-                PowerColor("runicPowerColor", "Runic Power",  "RUNIC_POWER"),
-                PowerColor("insanityColor",   "Insanity",     "INSANITY"),
-                PowerColor("maelstromColor",  "Maelstrom",    "MAELSTROM"),
-                PowerColor("lunarPowerColor", "Astral Power", "LUNAR_POWER"),
-                PowerColor("holyPowerColor",  "Holy Power",   "HOLY_POWER"),
-                PowerColor("furyColor",       "Fury",         "FURY"),
-                PowerColor("painColor",       "Pain",         "PAIN"),
-                PowerColor("essenceColor",    "Essence",      "ESSENCE"),
                 ResetButton(function()
                     local gp = GetGP()
                     if gp then gp.customPowerColors = nil end
@@ -438,15 +430,11 @@ function BuzzardFramesOptions:ColorsPage()
                       local cp = GetColorsP()
                       if cp then cp.useCustomClassColors = v end
                   end },
-                -- 13 classes in the order Blizzard's own UI shows them,
+                -- 9 classes in the order Blizzard's own UI shows them,
                 -- which is alphabetical rather than by class ID.
-                ClassColor("deathknightColor", "Death Knight", "DEATHKNIGHT"),
-                ClassColor("demonhunterColor", "Demon Hunter", "DEMONHUNTER"),
                 ClassColor("druidColor",       "Druid",        "DRUID"),
-                ClassColor("evokerColor",      "Evoker",       "EVOKER"),
                 ClassColor("hunterColor",      "Hunter",       "HUNTER"),
                 ClassColor("mageColor",        "Mage",         "MAGE"),
-                ClassColor("monkColor",        "Monk",         "MONK"),
                 ClassColor("paladinColor",     "Paladin",      "PALADIN"),
                 ClassColor("priestColor",      "Priest",       "PRIEST"),
                 ClassColor("rogueColor",       "Rogue",        "ROGUE"),

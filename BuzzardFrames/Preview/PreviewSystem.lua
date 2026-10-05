@@ -157,7 +157,7 @@ local CF_FAKE_UNIT_DEFAULTS = {
     { name = "CFBuzzard1", class = "PALADIN",     hp = 0.90, role = "TANK"    },
     { name = "CFBuzzard2", class = "DRUID",        hp = 0.65, role = "HEALER"  },
     { name = "CFBuzzard3", class = "ROGUE",        hp = 0.45, role = "DAMAGER" },
-    { name = "CFBuzzard4", class = "DEATHKNIGHT",  hp = 0.30, role = "TANK"    },
+    { name = "CFBuzzard4", class = "WARRIOR",      hp = 0.30, role = "TANK"    },
 }
 
 -- Preview frames are standalone visual dummies for the options panel.
@@ -616,7 +616,7 @@ local function LayoutPreviewFrame(frame, flatID)
     -- v28: resolve healthPower per-frame so preview frames see per-flat
     -- values for the power-bar visibility/height reads below.
     local hp = BF:GetSectionProfileForFrame("healthPower", frame) or {}
-    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers or hp.showPowerBarBloodDK
+    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
     local powerH = anyPowerBar and BF:Scale(hp.powerBarHeight or 4) or 0
 
     -- Update backdrop border to match current thickness/color/opacity.
@@ -712,7 +712,7 @@ local function LayoutPreviewCFFrame(frame, cfGroup)
     local borderN = BF:EffectiveBorderPixels(bp)
     local borderUI = BF:PixelsToUI(borderN)
     local hp = BF:GetSectionProfileForFrame("healthPower", frame) or {}
-    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers or hp.showPowerBarBloodDK
+    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
     local powerH = anyPowerBar and BF:Scale(hp.powerBarHeight or 4) or 0
 
     -- Rounded styles: skip the square backdrop edge (real

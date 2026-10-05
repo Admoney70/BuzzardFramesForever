@@ -164,7 +164,7 @@ end
 local function ResourceUpdate()
     local bf = BF()
     if not bf then return end
-    -- Whichever frame currently HOSTS ClassPower/Runes: with the player
+    -- Whichever frame currently HOSTS ClassPower: with the player
     -- raid-style twin on, the oUF player frame is hidden and the
     -- elements live on the insecure host instead.
     local host = (bf._ClassPowerOwner and bf:_ClassPowerOwner())
@@ -172,15 +172,6 @@ local function ResourceUpdate()
     local cpOn, cpCur, cpMax, cpType = bf:GetOUFClassPowerState(host)
     if cpOn then
         bf:UpdateOUFResourceBar(cpCur, cpMax, cpType)
-    elseif host and host.IsElementEnabled and host:IsElementEnabled("Runes") then
-        -- Death Knights: ClassPower is never enabled, so without this
-        -- branch every setting wired to this refresh (bar color,
-        -- use-type-color, show-empty, empty-dim) is inert for them.
-        -- ForceUpdate rather than UpdateOUFRuneBar: the latter only
-        -- repaints the dim _fill backing, while the bright rune color
-        -- comes from runes.UpdateColor, which only runs via oUF's
-        -- ColorPath -- i.e. from ForceUpdate, a spec change, or an event.
-        if host.Runes and host.Runes.ForceUpdate then host.Runes:ForceUpdate() end
     end
 end
 
@@ -542,18 +533,6 @@ function PAGES.resourceTab(spec)
                   if not p then return end
                   p.oufResourceBarEmptyDim = v / 100
               end },
-        }},
-        { title = "Partial Fill", preset = "form", hidden = rbOff, fields = {
-            uf.Sw("prof.oufResourceBarPartialFill", "Show Partial Fill",
-                  ResourceUpdate,
-                  { wide = true,
-                    desc = "Fills a pip in proportion to how far it has "
-                        .. "charged instead of leaving it empty until it "
-                        .. "completes. Applies to Evoker Essence, which fills "
-                        .. "as it recharges, and to Destruction soul shard "
-                        .. "fragments. Every other resource is whole points "
-                        .. "only and is unaffected; Death Knight runes always "
-                        .. "animate and ignore this setting." }),
         }},
     }
 end

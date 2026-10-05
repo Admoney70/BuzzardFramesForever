@@ -91,37 +91,25 @@ do
         getHostile  = function() return 585   end  -- Smite
         getFriendly = function() return 2061  end  -- Flash Heal
     elseif playerClass == "SHAMAN" then
-        getHostile  = function() return 188196 end -- Lightning Bolt
-        getFriendly = function() return 8004  end  -- Healing Surge
+        getHostile  = function() return 403   end  -- Lightning Bolt
+        getFriendly = function() return 331   end  -- Healing Wave
     elseif playerClass == "PALADIN" then
-        getHostile  = function() return 62124 end  -- Hand of Reckoning
-        getFriendly = function() return 19750 end  -- Flash of Light
-    elseif playerClass == "MONK" then
-        getHostile  = function() return 115546 end -- Provoke
-        getFriendly = function() return 116670 end -- Vivify
-    elseif playerClass == "EVOKER" then
-        getHostile  = function() return 361469 end -- Living Flame
-        getFriendly = function() return 355913 end -- Emerald Blossom
+        getHostile  = function() return IVS(853) or IVS(879) end  -- Hammer of Justice / Exorcism
+        getFriendly = function() return 635   end  -- Holy Light
     elseif playerClass == "WARLOCK" then
         getHostile  = function() return 686   end  -- Shadow Bolt
         getFriendly = function() return 20707 end  -- Soulstone
     elseif playerClass == "WARRIOR" then
         getHostile  = function() return 355   end  -- Taunt
         getFriendly = function() return nil   end
-    elseif playerClass == "DEMONHUNTER" then
-        getHostile  = function() return 185123 end -- Throw Glaive
-        getFriendly = function() return nil   end
     elseif playerClass == "HUNTER" then
-        getHostile  = function() return IVS(193455) or IVS(19434) or IVS(132031) end
+        getHostile  = function() return IVS(3044) or IVS(75) end -- Arcane Shot / Auto Shot
         getFriendly = function() return nil   end
     elseif playerClass == "ROGUE" then
-        getHostile  = function() return IVS(36554) or IVS(6770) end -- Shadowstep / Sap
-        getFriendly = function() return IVS(36554) end             -- Shadowstep
-    elseif playerClass == "DEATHKNIGHT" then
-        getHostile  = function() return IVS(47541) or IVS(49576) end -- Death Coil / Death Grip
-        getFriendly = function() return IVS(47541) end               -- Death Coil
+        getHostile  = function() return IVS(6770) or IVS(2764) end -- Sap / Throw
+        getFriendly = function() return nil   end
     elseif playerClass == "MAGE" then
-        getHostile  = function() return IVS(116) or IVS(30451) or IVS(133) end -- Frostbolt/Arcane Blast/Fireball
+        getHostile  = function() return IVS(116) or IVS(133) end -- Frostbolt/Fireball
         getFriendly = function() return 1459  end  -- Arcane Intellect
     end
 
@@ -176,10 +164,7 @@ local rezSpellID = ({
     PRIEST      = 2006,   -- Resurrection
     PALADIN     = 7328,   -- Redemption
     SHAMAN      = 2008,   -- Ancestral Spirit
-    MONK        = 115178, -- Resuscitate
-    DEATHKNIGHT = 61999,  -- Raise Ally
     WARLOCK     = 20707,  -- Soulstone
-    EVOKER      = 361227, -- Return
 })[playerClass]
 local rezSpell = rezSpellID and C_Spell.GetSpellName(rezSpellID)
 
@@ -190,7 +175,6 @@ local rezSpell = rezSpellID and C_Spell.GetSpellName(rezSpellID)
 local petSpellID = ({
     HUNTER      = 136,   -- Mend Pet
     WARLOCK     = 5697,  -- Unending Breath (Health Funnel 755 removed in 12.0)
-    DEATHKNIGHT = 47541, -- Death Coil
 })[playerClass]
 local petSpell = petSpellID and C_Spell.GetSpellName(petSpellID)
 

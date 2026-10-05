@@ -381,7 +381,7 @@ function BF:OnEnable()
     do
         local p = self.db and self.db.profile
         if p and p.showPowerBar then
-            if not p.showAllPowerBars and not p.showPowerBarHealers and not p.showPowerBarBloodDK then
+            if not p.showAllPowerBars and not p.showPowerBarHealers then
                 p.showPowerBarHealers = true
             end
             p.showPowerBar = nil  -- clear legacy key

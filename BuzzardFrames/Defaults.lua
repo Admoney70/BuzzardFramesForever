@@ -612,7 +612,7 @@ BF.defaults = {
 }
 
 -- ============================================================
--- SPEC / ROLE FILTER DATA  (WoW 12.0 specializations)
+-- SPEC / ROLE FILTER DATA  (WoW Forever specializations -- the nine Classic classes)
 -- ============================================================
 -- Each entry:
 --   { id=specID, name="Display Name", icon="Interface\\Icons\\...",
@@ -633,31 +633,22 @@ BF.specData = {
     { id=62,  name="Arcane",         icon="Interface\\Icons\\Spell_Holy_MagicalSentry",              role="DAMAGER", class="MAGE" },
     { id=71,  name="Arms",           icon="Interface\\Icons\\Ability_Warrior_SavageBlow",            role="DAMAGER", class="WARRIOR" },
     { id=259, name="Assassination",  icon="Interface\\Icons\\Ability_Rogue_DeadlyBrew",              role="DAMAGER", class="ROGUE" },
-    { id=1473, name="Augmentation",  icon="Interface\\Icons\\ClassIcon_Evoker_Augmentation",         role="DAMAGER", class="EVOKER" },
     { id=102, name="Balance",        icon="Interface\\Icons\\Spell_Nature_StarFall",                 role="DAMAGER", class="DRUID" },
     { id=253, name="Beast Mastery",  icon="Interface\\Icons\\Ability_Hunter_BeastMastery",           role="DAMAGER", class="HUNTER" },
-    { id=250, name="Blood",          icon="Interface\\Icons\\Spell_DeathKnight_BloodPresence",       role="TANK", class="DEATHKNIGHT" },
-    { id=268, name="Brewmaster",     icon="Interface\\Icons\\Monk_Stance_DrunkenOx",                 role="TANK", class="MONK" },
     { id=266, name="Demonology",     icon="Interface\\Icons\\Spell_Shadow_Metamorphosis",            role="DAMAGER", class="WARLOCK" },
     { id=267, name="Destruction",    icon="Interface\\Icons\\Spell_Shadow_RainOfFire",               role="DAMAGER", class="WARLOCK" },
-    { id=1467, name="Devastation",   icon="Interface\\Icons\\ClassIcon_Evoker_Devastation",          role="DAMAGER", class="EVOKER" },
-    { id=1480, name="Devourer",      icon="Interface\\Icons\\Classicon_demonhunter_void",            role="DAMAGER", class="DEMONHUNTER" },
     { id=256, name="Discipline",     icon="Interface\\Icons\\Spell_Holy_PowerWordShield",            role="HEALER", class="PRIEST" },
     { id=262, name="Elemental",      icon="Interface\\Icons\\Spell_Nature_Lightning",                role="DAMAGER", class="SHAMAN" },
     { id=263, name="Enhancement",    icon="Interface\\Icons\\Spell_Nature_LightningShield",          role="DAMAGER", class="SHAMAN" },
     { id=103, name="Feral",          icon="Interface\\Icons\\Ability_Druid_CatForm",                 role="DAMAGER", class="DRUID" },
     { id=63,  name="Fire",           icon="Interface\\Icons\\Spell_Fire_FireBolt02",                 role="DAMAGER", class="MAGE" },
-    { id=251, name="Frost DK",       icon="Interface\\Icons\\Spell_Deathknight_FrostPresence",       role="DAMAGER", class="DEATHKNIGHT" },
     { id=64,  name="Frost Mage",     icon="Interface\\Icons\\Spell_Frost_FrostBolt02",               role="DAMAGER", class="MAGE" },
     { id=72,  name="Fury",           icon="Interface\\Icons\\Ability_Warrior_InnerRage",             role="DAMAGER", class="WARRIOR" },
     { id=104, name="Guardian",       icon="Interface\\Icons\\Ability_Racial_BearForm",               role="TANK", class="DRUID" },
-    { id=577, name="Havoc",          icon="Interface\\Icons\\Ability_DemonHunter_SpecDPS",           role="DAMAGER", class="DEMONHUNTER" },
     { id=65,  name="Holy Paladin",   icon="Interface\\Icons\\Spell_Holy_HolyBolt",                   role="HEALER", class="PALADIN" },
     { id=257, name="Holy Priest",    icon="Interface\\Icons\\Spell_Holy_GuardianSpirit",             role="HEALER", class="PRIEST" },
     { id=254, name="Marksmanship",   icon="Interface\\Icons\\Ability_Hunter_FocusedAim",             role="DAMAGER", class="HUNTER" },
-    { id=270, name="Mistweaver",     icon="Interface\\Icons\\Monk_Stance_WiseSerpent",               role="HEALER", class="MONK" },
     { id=260, name="Outlaw",         icon="Interface\\Icons\\Ability_Rogue_Waylay",                  role="DAMAGER", class="ROGUE" },
-    { id=1468, name="Preservation",  icon="Interface\\Icons\\ClassIcon_Evoker_Preservation",         role="HEALER", class="EVOKER" },
     { id=66,  name="Protection Paladin", icon="Interface\\Icons\\Ability_Paladin_ShieldOfTheTemplar", role="TANK", class="PALADIN" },
     { id=73,  name="Protection Warrior", icon="Interface\\Icons\\Ability_Warrior_DefensiveStance",   role="TANK", class="WARRIOR" },
     { id=105, name="Restoration Druid", icon="Interface\\Icons\\Spell_Nature_HealingTouch",          role="HEALER", class="DRUID" },
@@ -666,9 +657,6 @@ BF.specData = {
     { id=258, name="Shadow",         icon="Interface\\Icons\\Spell_Shadow_ShadowWordPain",           role="DAMAGER", class="PRIEST" },
     { id=261, name="Subtlety",       icon="Interface\\Icons\\Ability_Stealth",                       role="DAMAGER", class="ROGUE" },
     { id=255, name="Survival Hunter",icon="Interface\\Icons\\Ability_Hunter_Camouflage",             role="DAMAGER", class="HUNTER" },
-    { id=252, name="Unholy",         icon="Interface\\Icons\\Spell_DeathKnight_UnholyPresence",      role="DAMAGER", class="DEATHKNIGHT" },
-    { id=581, name="Vengeance",      icon="Interface\\Icons\\Ability_DemonHunter_SpecTank",          role="TANK", class="DEMONHUNTER" },
-    { id=269, name="Windwalker",     icon="Interface\\Icons\\Spell_Monk_Windwalker_Spec",            role="DAMAGER", class="MONK" }
 
 }
 

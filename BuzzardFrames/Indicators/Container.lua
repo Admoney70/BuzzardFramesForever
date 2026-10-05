@@ -322,7 +322,7 @@ function BF.ComputeFrameContentGeometry(parent)
 	-- toggle, so the strip must be reserved even with all three flat
 	-- filters off (BF:TwinForcesPowerBar, LayoutFrame.lua). Non-twin
 	-- frames get nil back and behave exactly as before.
-	local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers or hp.showPowerBarBloodDK
+	local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
 		or (BF.TwinForcesPowerBar and BF:TwinForcesPowerBar(parent) == true)
 	local rawPowerH = anyPowerBar and (hp.powerBarHeight or 4) or 0
 	local powerH = BF.Scale and BF:Scale(rawPowerH) or rawPowerH

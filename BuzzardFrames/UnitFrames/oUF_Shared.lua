@@ -5035,10 +5035,6 @@ local _classIconCoords = {
     PRIEST        = { 0.5,  0.75,  0.25, 0.5   },
     WARLOCK       = { 0.75, 1.0,   0.25, 0.5   },
     PALADIN       = { 0,    0.25,  0.5,  0.75  },
-    DEATHKNIGHT   = { 0.25, 0.5,   0.5,  0.75  },
-    MONK          = { 0.5,  0.75,  0.5,  0.75  },
-    DEMONHUNTER   = { 0.75, 1.0,   0.5,  0.75  },
-    EVOKER        = { 0,    0.25,  0.75, 1.0   },
 }
 function BF:SetClassIcon(tex, className)
     if not className then return false end

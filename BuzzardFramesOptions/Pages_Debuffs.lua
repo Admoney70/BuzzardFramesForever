@@ -940,7 +940,7 @@ end
 -- SUBTAB 2: Debuff Preset/Filter
 -- ══════════════════════════════════════════════════════════════
 
--- The five acDB toggles at the foot of the subtab bypass the aura routing on
+-- The acDB toggles at the foot of the subtab bypass the aura routing on
 -- purpose: they live in acDB.profile, are ONE value for the whole profile and
 -- cannot be set per Layout. Routing them through the aura write would
 -- silently relocate the value away from the key every runtime reader already
@@ -952,20 +952,11 @@ local GLOBAL_SCOPE_NOTE =
 
 local LONG_TERM_DEBUFFS = {
     { key = "showSatedDebuffs", label = "Sated / Exhaustion",
-      desc = "Show Sated, Exhaustion, Temporal Displacement, and similar "
+      desc = "Show Sated, Exhaustion, and similar "
           .. "bloodlust debuffs on raid/party frames when out of combat." },
     { key = "showDeserterDebuffs", label = "Deserter",
       desc = "Show BG Deserter and Dungeon Deserter debuffs on raid/party "
           .. "frames when out of combat." },
-    { key = "showSkyridingDebuffs", label = "Skyriding Ride Along",
-      desc = "Show Skyriding Ride Along (Available, Active, Inactive) "
-          .. "debuffs on raid/party frames when out of combat." },
-    { key = "showArcaneEmpowermentDebuffs", label = "Arcane Empowerment",
-      desc = "Show the Arcane Empowerment debuff on raid/party frames when "
-          .. "out of combat." },
-    { key = "showTimeTrialDebuffs", label = "Time Trial Practice",
-      desc = "Show the Time Trial Practice debuff on raid/party frames when "
-          .. "out of combat." },
 }
 
 -- One MENU ROW per long-term debuff, in the shape the panel's own menu
@@ -1358,9 +1349,7 @@ local function RowCard(row, effect)
             control = "switch", label = "Include Long-Cooldown Dispels",
             bind = "debuffDispMeLongCd", wide = true,
             desc = "Factor in long-cd dispel abilities. e.g. Include poisons "
-                .. "for Shaman when Poison Cleansing Totem is talented, "
-                .. "Include Bleed, Curse and Disease for Evoker when "
-                .. "Cauterizing Flame is talented.",
+                .. "for Shaman when Poison Cleansing Totem is talented.",
             hidden = dispToggleHidden, disabled = "combat",
             onChange = governorEffect,
             get = OffUnlessTrue(DP, "debuffDispMeLongCd"),
@@ -1897,8 +1886,7 @@ local function DispelGroups(effect)
               bind = "dispelVisualDispMeLongCd", wide = true,
               desc = "Factor in long-cd dispel abilities. e.g. Include "
                   .. "poisons for Shaman when Poison Cleansing Totem is "
-                  .. "talented, Include Bleed, Curse and Disease for Evoker "
-                  .. "when Cauterizing Flame is talented.",
+                  .. "talented.",
               hidden = function() return not DispelCustomMode() end,
               onChange = effect,
               get = OffUnlessTrue(IP, "dispelVisualDispMeLongCd") },

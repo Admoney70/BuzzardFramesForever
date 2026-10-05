@@ -22,31 +22,12 @@ if select(2, ...).IS_LEGACY_CLIENT then return end -- HET-LEGACY-1207: no-op onc
 -- Each "kind" ("buff", "debuff", "ability", "item") gets its own flattened
 -- list + by-id lookup (ns.SpellData.KINDS[kind] = { FLAT=, BYID= }). The buff
 -- kind's FLAT/BYID are ALSO exposed as ns.SpellData.FLAT/BYID for backward
--- compatibility (the defensive / Bloodlust / Time Spiral groups read those).
+-- compatibility (the defensive / Bloodlust groups read those).
 -------------------------------------------------------------------------------
 local addonName, ns = ...
 
 local SPELLS = {
-    [""] = {
-        377234, -- Thrill of the Skies
-        388367, -- Ohn'ahra's Gusts
-        404464, -- Flight Style: Skyriding
-        404468, -- Flight Style: Steady
-        418590, -- Static Charge
-        427490, -- Ride Along Available
-        447959, -- Ride Along Active
-        447960, -- Ride Along Inactive
-    },
-    ["DEATHKNIGHT"] = {
-        { 375226, "Time Spiral" }, -- Time Spiral (Death Knight)
-		{ 195181, "Personal Buff" }, -- Bone Shield
-		{ 108416, "Personal Defensive" }, -- Dark Pact
-		{ 49039, "Personal Defensive" }, -- Lichborne
-		{ 48792, "Personal Defensive" }, -- Icebound Fortitude
-		{ 48707, "Personal Defensive" }, -- Anti-Magic Shell
-    },
     ["DRUID"] = {
-        { 474754, "Raid Buff" }, -- Symbiotic Relationship
         { 1126, "Raid Buff" },      -- Mark of the Wild
         { 774, "Healer Buff" },     -- Rejuvenation
         { 8936, "Healer Buff" },    -- Regrowth
@@ -72,7 +53,6 @@ local SPELLS = {
         { 1850, "Movement Buff" },     -- Dash (HET)
         { 252216, "Movement Buff" },     -- Tiger Dash (HET)
         { 77764, "Movement Buff" },     -- Stampeding Roar (HET)
-        { 375230, "Time Spiral" }, -- Time Spiral (Druid)
 		{ 192081, "Personal Buff" }, -- Ironfur
 		{ 61336, "Personal Defensive" }, -- Survival Instincts
     },
@@ -80,7 +60,6 @@ local SPELLS = {
         260286, -- Tip of the Spear
         { 264667, "Bloodlust" }, -- Primal Rage (pet)
         { 466904, "Bloodlust" }, -- Harrier's Cry (Marksmanship)
-        { 375238, "Time Spiral" }, -- Time Spiral (Hunter)
 		{ 264735, "Personal Defensive" }, -- Survival of the Fittest
 		{ 186265, "Personal Defensive" }, -- Aspect of the Turtle
     },
@@ -88,25 +67,10 @@ local SPELLS = {
         { 1459, "Raid Buff" }, -- Arcane Intellect
         { 80353, "Bloodlust" }, -- Time Warp
         205473, -- Icicles
-        { 375240, "Time Spiral" }, -- Time Spiral (Mage)
 		{ 235313, "Personal Defensive" }, -- Blazing Barrier
 		{ 11426, "Personal Defensive" }, -- Ice Barrier
 		{ 414658, "Personal Defensive" }, -- Ice Cold
 		{ 235450, "Personal Defensive" }, -- Prismatic Barrier
-    },
-    ["MONK"] = {
-        { 115175, "Healer Buff" }, -- Soothing Mist
-        { 119611, "Healer Buff" }, -- Renewing Mist
-        { 124682, "Healer Buff" }, -- Enveloping Mist
-        { 450769, "Healer Buff" }, -- Aspect of Harmony
-        124255, -- Stagger
-        { 116849, "External Defensive" }, -- Life Cocoon (HET)
-        { 375252, "Time Spiral" }, -- Time Spiral (Monk)
-		{ 406139, "Healer Buff" }, -- Chi Cocoon
-		{ 195630, "Personal Buff" }, -- Elusive Brawler
-		{ 120954, "Personal Defensive" }, -- Fortifying Brew
-		{ 215479, "Personal Buff" }, -- Shuffle
-		{ 198533, "Healer Buff" }, -- Soothing Mist
     },
     ["PALADIN"] = {
         { 53563, "Healer Buff" },   -- Beacon of Light
@@ -120,7 +84,6 @@ local SPELLS = {
         { 1022, "External Defensive" },   -- Blessing of Protection (HET)
         { 204018, "External Defensive" }, -- Blessing of Spellwarding (HET)
         { 31821, "External Defensive" },  -- Aura Mastery (HET)
-        { 375253, "Time Spiral" }, -- Time Spiral (Paladin)
 		{ 209388, "Personal Buff" }, -- Bulwark of Order
 		{ 403876, "Personal Defensive" }, -- Divine Protection
 		{ 498, "Personal Defensive" }, -- Divine Protection
@@ -140,7 +103,6 @@ local SPELLS = {
         { 33206, "External Defensive" }, -- Pain Suppression (HET)
         { 47788, "External Defensive" }, -- Guardian Spirit (HET)
         { 10060, "Offensive Buff" },     -- Power Infusion (HET)
-        { 375254, "Time Spiral" }, -- Time Spiral (Priest)
 		{ 586, "Personal Buff" }, -- Fade
 		{ 19236, "Personal Defensive" }, -- Desperate Prayer
     },
@@ -152,7 +114,6 @@ local SPELLS = {
         315584, -- Instant Poison
         381637, -- Atrophic Poison
         381664, -- Amplifying Poison
-        { 375255, "Time Spiral" }, -- Time Spiral (Rogue)
 		{ 31224, "Personal Defensive" }, -- Cloak of Shadows
 		{ 5277, "Personal Defensive" }, -- Evasion
 		{ 1966, "Personal Defensive" }, -- Feint
@@ -160,7 +121,6 @@ local SPELLS = {
     ["SHAMAN"] = {
         { 2825, "Bloodlust" },  -- Bloodlust (Horde)
         { 32182, "Bloodlust" }, -- Heroism (Alliance)
-        { 462854, "Raid Buff" }, -- Skyfury
         { 974, "Healer Buff" }, { 383648, "Healer Buff" }, -- Earth Shield
         { 61295, "Healer Buff" }, -- Riptide
         319773, -- Windfury Weapon
@@ -171,12 +131,10 @@ local SPELLS = {
         344179, -- Maelstrom Weapon
         { 207400, "Healer Buff" }, -- Ancestral Vigor
         { 444490, "Healer Buff" }, -- Hydrobubble
-        { 375256, "Time Spiral" }, -- Time Spiral (Shaman)
 		{ 108271, "Personal Defensive" }, -- Astral Shift
 		{ 198103, "Personal Buff" }, -- Earth Elemental
     },
     ["WARLOCK"] = {
-        { 375257, "Time Spiral" }, -- Time Spiral (Warlock)
 		{ 20707, "Personal Buff" }, -- Soulstone
 		{ 104773, "Personal Defensive" }, -- Unending Resolve
     },
@@ -184,7 +142,6 @@ local SPELLS = {
         { 6673, "Raid Buff" }, -- Battle Shout
         { 97462, "External Defensive" }, -- Rallying Cry cast (HET)
         { 97463, "External Defensive" }, -- Rallying Cry buff (HET, PTR-VERIFY)
-        { 375258, "Time Spiral" }, -- Time Spiral (Warrior)
 		{ 118038, "Personal Buff" }, -- Die by the Sword
 		{ 184364, "Personal Defensive" }, -- Enraged Regeneration
 		{ 190456, "Personal Buff" }, -- Ignore Pain 
@@ -194,48 +151,11 @@ local SPELLS = {
 		{ 12975, "Personal Buff" }, -- Last Stand
 		{ 871, "Personal Buff" }, -- Shield Wall
     },
-    ["DEMONHUNTER"] = {
-        1217607, -- Void Metamorphosis
-        1225789, -- Void Metamorphosis
-        1227702, -- Collapsing Star
-        { 375229, "Time Spiral" }, -- Time Spiral (Demon Hunter)
-		{ 203819, "Personal Buff" }, -- Demon Spikes
-    },
-    ["EVOKER"] = {
-        { 357209, "Debuff" },         -- Fire Breath (debuff on target)
-        { 390386, "Bloodlust" },      -- Fury of the Aspects
-        { 369459, "Healer Utility" }, -- Source of Magic
-        { 355941, "Healer Buff" },    -- Dream Breath
-        { 363502, "Healer Buff" },    -- Dream Flight
-        { 364343, "Healer Buff" },    -- Echo
-        { 366155, "Healer Buff" },    -- Reversion
-        { 367364, "Healer Buff" },    -- Echo Reversion
-        { 373267, "Healer Buff" },    -- Lifebind
-        { 376788, "Healer Buff" },    -- Echo Dream Breath
-        360827, -- Blistering Scales
-        { 395152, "Offensive Buff" }, { 395296, "Offensive Buff" }, -- Ebon Might
-        { 410089, "Offensive Buff" }, -- Prescience
-        { 410263, "Offensive Buff" }, -- Inferno's Blessing
-        { 410686, "Offensive Buff" }, -- Symbiotic Bloom
-        { 413984, "Offensive Buff" }, -- Shifting Sands
-        { 381732, "Raid Buff" }, { 381741, "Raid Buff" }, { 381746, "Raid Buff" },
-        { 381748, "Raid Buff" }, { 381749, "Raid Buff" }, { 381750, "Raid Buff" },
-        { 381751, "Raid Buff" }, { 381752, "Raid Buff" }, { 381753, "Raid Buff" },
-        { 381754, "Raid Buff" }, { 381756, "Raid Buff" }, { 381757, "Raid Buff" },
-        { 381758, "Raid Buff" }, -- Blessing of the Bronze
-        { 357170, "External Defensive" }, -- Time Dilation (HET)
-        { 374227, "External Defensive" }, -- Zephyr (HET)
-        { 406732, "Healer Utility" }, -- Spatial Paradox cast (HET)
-        { 406789, "Healer Utility" }, -- Spatial Paradox buff (HET, PTR-VERIFY)
-        { 375234, "Time Spiral" }, -- Time Spiral (Evoker)
-		{ 363916, "Personal Defensive" }, -- Obsidian Scales
-		{ 358267, "Movement Buff" }, -- Hover
-    },
 }
 
 local CLASS_ORDER = {
-    "", "DEATHKNIGHT", "DEMONHUNTER", "DRUID", "EVOKER", "HUNTER", "MAGE",
-    "MONK", "PALADIN", "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+    "", "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST", "ROGUE", "SHAMAN",
+    "WARLOCK", "WARRIOR",
 }
 
 -- Flatten a class-keyed SPELLS table (class order preserved) into a flat
@@ -273,8 +193,8 @@ local function Register(kind, spells)
 end
 
 -- Buff kind (this file). Its FLAT/BYID double as the top-level, backward-
--- compatible ns.SpellData.FLAT/BYID consumed by the defensive/Bloodlust/
--- Time Spiral group builders and the buff search predictor.
+-- compatible ns.SpellData.FLAT/BYID consumed by the defensive/Bloodlust
+-- group builders and the buff search predictor.
 local buffKind = Register("buff", SPELLS)
 local FLAT, BYID = buffKind.FLAT, buffKind.BYID
 
@@ -283,8 +203,8 @@ local FLAT, BYID = buffKind.FLAT, buffKind.BYID
 -- + buff), alphabetical by name, key = first spell ID (locale-stable).
 -- clips: optional map [spellID] = { clip, clipShort } (Media\Audio\Voice_*).
 -- opts.perClass: NO name merging — every ID gets its own entry labeled
--- "Name (Class)" with the class name in class color (Time Spiral: one
--- row per class). Sorting uses the UNCOLORED "Name Class" string so
+-- "Name (Class)" with the class name in class color (one row per
+-- class). Sorting uses the UNCOLORED "Name Class" string so
 -- escape codes never drive the order.
 local GetSpellName = C_Spell.GetSpellName
 

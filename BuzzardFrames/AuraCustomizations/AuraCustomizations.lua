@@ -274,21 +274,14 @@ function BF.GetRaidBuffLookupID(unit)
     if not classBuff then return nil end
     if type(classBuff) == "number" then
         return classBuff
-    else
-        -- Evoker: return the variant that applies to this unit's class.
-        -- 12.1: UnitClassBase returns a secret for identity-secret units —
-        -- a secret cannot be truth-tested or used as a table key, so bail
-        -- (no raid-buff lookup for that unit).
-        local unitClass = UnitClassBase and UnitClassBase(unit)
-        if unitClass == nil or issecretvalue(unitClass) then return nil end
-        return BF.EVOKER_BUFF_BY_CLASS[unitClass]
     end
+    return nil
 end
 
 -- ============================================================
 -- AURA FILTER HELPERS
 --
--- Long-term auras (raid buffs, sated, deserter, skyriding) are always hidden
+-- Long-term auras (raid buffs, sated, deserter) are always hidden
 -- in combat (they're noise during a fight) and shown out of combat only when
 -- the corresponding setting is enabled.
 -- spellId is only compared after canaccessvalue() confirms it's readable.
@@ -313,18 +306,6 @@ local function ShouldFilterDebuff(sid, p)
     if BF.DESERTER_SPELL_IDS[sid] then
         if InCombatLockdown() then return true end
         local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showDeserterDebuffs)
-    end
-    if BF.SKYRIDING_SPELL_IDS[sid] then
-        if InCombatLockdown() then return true end
-        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showSkyridingDebuffs)
-    end
-    if BF.ARCANE_EMPOWERMENT_SPELL_IDS[sid] then
-        if InCombatLockdown() then return true end
-        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showArcaneEmpowermentDebuffs)
-    end
-    if BF.TIME_TRIAL_SPELL_IDS[sid] then
-        if InCombatLockdown() then return true end
-        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showTimeTrialDebuffs)
     end
     return false
 end
@@ -2957,8 +2938,8 @@ BF._missingRaidBuffTracker  = nil   -- SingleAuraTracker instance or nil
 BF._missingSymbioticTracker = nil
 
 -- Returns the class currently used to scope the missing-raid-buff
--- tracker. nil for classes with no raid buff (Death Knight, Demon Hunter,
--- Monk, Hunter, Paladin, Rogue, Warlock). When this changes, both
+-- tracker. nil for classes with no raid buff (Hunter, Paladin, Rogue,
+-- Shaman, Warlock). When this changes, both
 -- trackers must be torn down and rebuilt.
 local function GetTrackedPlayerClass()
     local playerClass = UnitClassBase and UnitClassBase("player")
@@ -2996,7 +2977,7 @@ end
 
 local function EnsureMissingRaidBuffTracker(self, playerClass)
     -- Toggle gate: register only when at least one flat has the feature on.
-    -- Without this, every Druid/Priest/Mage/Warrior/Shaman/Evoker paid for
+    -- Without this, every Druid/Priest/Mage/Warrior paid for
     -- the per-UA scan even with the feature globally off -- a real regression
     -- vs v4.4.4 where the cache maintenance block in Buffs:UNIT_AURA bailed
     -- early on `not (showMissingRaidBuff or showMissingSymbiotic)`.
@@ -4488,12 +4469,6 @@ local function EnsureBuffsPresetsSeeded(p)
             t.roleOverrides.HEALER = { preset = "none", _present = true }
         end
         t.specOverrides = t.specOverrides or {}
-        -- 1473 = Augmentation Evoker. String key: ResolveBuffsPreset indexes
-        -- specOverrides with tostring(playerSpecID), and the options tree
-        -- writes string keys too.
-        if type(t.specOverrides["1473"]) ~= "table" then
-            t.specOverrides["1473"] = { preset = "none", _present = true }
-        end
     end
 end
 BF.EnsureBuffsPresetsSeeded = EnsureBuffsPresetsSeeded

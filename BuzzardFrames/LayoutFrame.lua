@@ -128,7 +128,7 @@ end
 
 -- ============================================================
 -- POWER BAR HELPER
--- showAllPowerBars / showPowerBarHealers / showPowerBarBloodDK are
+-- showAllPowerBars / showPowerBarHealers are
 -- healthPower-section keys (rpDB.profile.healthPower).
 -- ============================================================
 
@@ -148,8 +148,8 @@ function BF:ShouldShowPowerBar(unit, frame)
         return true
     end
 
-    -- Derived from the 3 visibility toggles — no master toggle needed.
-    if not hp.showAllPowerBars and not hp.showPowerBarHealers and not hp.showPowerBarBloodDK then return false end
+    -- Derived from the 2 visibility toggles — no master toggle needed.
+    if not hp.showAllPowerBars and not hp.showPowerBarHealers then return false end
 
     local offlineStatus = BF.statuses and BF.statuses.offline
     if offlineStatus and offlineStatus:IsActive(unit) then return false end
@@ -162,10 +162,6 @@ function BF:ShouldShowPowerBar(unit, frame)
         local spec = GetSpecialization()
         if not spec then return false end
         if hp.showPowerBarHealers and GetSpecializationRole(spec) == "HEALER" then return true end
-        if hp.showPowerBarBloodDK then
-            local _, className = UnitClass(unit)
-            if className == "DEATHKNIGHT" and spec == 1 then return true end
-        end
         return false
     end
 
@@ -175,11 +171,6 @@ function BF:ShouldShowPowerBar(unit, frame)
     -- same fallback CastBar's healers-only filter uses.
     if not canaccessvalue(role) then role = nil end
     if hp.showPowerBarHealers and role == "HEALER" then return true end
-    if hp.showPowerBarBloodDK then
-        local _, className = UnitClass(unit)
-        if not canaccessvalue(className) then className = nil end
-        if className == "DEATHKNIGHT" and role == "TANK" then return true end
-    end
     return false
 end
 

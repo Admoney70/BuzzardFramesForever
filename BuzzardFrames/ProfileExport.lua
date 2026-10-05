@@ -327,8 +327,7 @@ local AC_SECTIONS = {
     customBuffContainers = true, customDebuffContainers = true,
     debuffFilter = true,
     showSatedDebuffs = true, showDeserterDebuffs = true,
-    showSkyridingDebuffs = true, showArcaneEmpowermentDebuffs = true,
-    showTimeTrialDebuffs = true, showRaidBuffs = true,
+    showRaidBuffs = true,
     buffsDisplay = true,
     -- Per-spec / per-spell customization tables (created dynamically;
     -- no defaults entries — exported whole when present).

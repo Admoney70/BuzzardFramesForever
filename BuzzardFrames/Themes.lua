@@ -46,7 +46,7 @@
 --   NEVER touched: Aura Customizations (acDB), Incoming Casts (icDB).
 --   Because acDB is off limits, the Raid Buffs toggle and the "Global
 --   Options" group on the two Preset/Filter subtabs (showRaidBuffs;
---   showSated / Deserter / Skyriding / ArcaneEmpowerment / TimeTrial) are
+--   showSated / Deserter) are
 --   already outside a theme's reach, as are the Preset/Filter subtab
 --   (acDB.profile.buffsDisplay), the Whitelist/Blacklist entries and the
 --   custom buff containers (acDB.profile.customBuffContainers).

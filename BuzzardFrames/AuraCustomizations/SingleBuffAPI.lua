@@ -22,9 +22,6 @@ local HEALER_SPECS = {
     { id = 256,  name = "Discipline Priest",   tabName = "Discipline Priest",    classColor = "c2c2c2", tabPad = "   " },
     { id = 257,  name = "Holy Priest",         tabName = "Holy Priest",          classColor = "c2c2c2", tabPad = "       " },
     { id = 65,   name = "Holy Paladin",        tabName = "Holy Paladin",         classColor = "f48cba", tabPad = "      " },
-    { id = 270,  name = "Mistweaver Monk",     tabName = "Mistweaver Monk",      classColor = "00ff98", tabPad = "    " },
-    { id = 1473, name = "Augmentation Evoker", tabName = "Augmentation Evoker",  classColor = "33937f" },
-    { id = 1468, name = "Preservation Evoker", tabName = "Preservation Evoker",  classColor = "33937f" },
     { id = 105,  name = "Restoration Druid",   tabName = "Resto Druid",          classColor = "ff7c0a" },
     { id = 264,  name = "Restoration Shaman",  tabName = "Resto Shaman",         classColor = "0070dd" },
 }

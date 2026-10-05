@@ -50,18 +50,6 @@ local DISPEL_SPELLS_BY_SPEC = {
     [103] = { 2782 },       -- Remove Corruption (Curse, Poison)
     [104] = { 2782 },       -- Remove Corruption (Curse, Poison)
 
-    -- Monk: Mistweaver (270)
-    [270] = { 115450 },     -- Detox (Magic, Poison, Disease)
-    -- Monk: Brewmaster (268), Windwalker (269)
-    [268] = { 218164 },     -- Detox (Poison, Disease)
-    [269] = { 218164 },     -- Detox (Poison, Disease)
-
-    -- Evoker: Preservation (1468)
-    [1468] = { 360823 },    -- Naturalize (Magic, Poison)
-    -- Evoker: Augmentation (1473), Devastation (1467)
-    [1473] = { 374251 },    -- Cauterizing Flame (Bleed, Poison, Curse, Disease)
-    [1467] = { 374251 },    -- Cauterizing Flame (Bleed, Poison, Curse, Disease)
-
     -- Mage: Arcane (62), Fire (63), Frost (64)
     [62]  = { 475 },        -- Remove Curse (Curse)
     [63]  = { 475 },        -- Remove Curse (Curse)

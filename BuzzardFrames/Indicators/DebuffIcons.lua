@@ -104,23 +104,13 @@ local DISPEL_TYPES_BY_SPEC = {
     [104] = { talents = { [2782]   = { Curse = true, Poison = true } } },
     [105] = { base = { Magic = true },
               talents = { [392378] = { Curse = true, Poison = true } } }, -- Improved Nature's Cure
-    [268] = { talents = { [218164] = { Poison = true, Disease = true } } }, -- Detox (non-heal)
-    [269] = { talents = { [218164] = { Poison = true, Disease = true } } },
-    [270] = { base = { Magic = true },
-              talents = { [388874] = { Poison = true, Disease = true } } }, -- Improved Detox
     [62]  = { talents = { [475]    = { Curse = true } } },             -- Remove Curse
     [63]  = { talents = { [475]    = { Curse = true } } },
     [64]  = { talents = { [475]    = { Curse = true } } },
-    [1467] = { base = { Poison = true },                               -- Expunge
-               longCd = { [374251] = { Bleed = true, Curse = true, Disease = true } } },
-    [1468] = { base = { Magic = true, Poison = true },                 -- Naturalize
-               longCd = { [374251] = { Bleed = true, Curse = true, Disease = true } } },
-    [1473] = { base = { Poison = true },
-               longCd = { [374251] = { Bleed = true, Curse = true, Disease = true } } },
     [265] = { base = { Magic = true } },                               -- Singe Magic (Imp pet)
     [266] = { base = { Magic = true } },
     [267] = { base = { Magic = true } },
-    -- DK / DH / Hunter / Rogue / Warrior: no entry -> empty set.
+    -- Hunter / Rogue / Warrior: no entry -> empty set.
 }
 BF.DISPEL_TYPES_BY_SPEC = DISPEL_TYPES_BY_SPEC
 

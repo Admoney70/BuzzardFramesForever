@@ -1,6 +1,6 @@
 -- BuzzardFrames: oUF_ResourceBar.lua
--- Pip-style resource bar (Holy Power, Combo Points, Soul Shards,
--- Arcane Charges, Chi, Essence, Maelstrom Weapon).
+-- Pip-style resource bar (Combo Points, plus any other ClassPower pip
+-- resource oUF reports).
 -- Hidden for classes/specs with no pip resource.
 --
 -- Attached: parented to the oUF player frame, anchored below its
@@ -11,85 +11,56 @@ local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
 
 local RESOURCE_COLORS = {
     [4]  = { r=1.00, g=0.96, b=0.41 }, -- Combo Points
-    [5]  = { r=0.77, g=0.12, b=0.23 }, -- Runes (Death Knight)
     [7]  = { r=0.80, g=0.10, b=0.10 }, -- Soul Shards
     [9]  = { r=1.00, g=0.61, b=0.04 }, -- Holy Power
-    [12] = { r=0.00, g=1.00, b=0.60 }, -- Chi
     [16] = { r=0.58, g=0.51, b=0.79 }, -- Arcane Charges
-    [19] = { r=0.00, g=0.80, b=1.00 }, -- Essence
     [26] = { r=0.00, g=0.82, b=1.00 }, -- Maelstrom Weapon
 }
 
 -- Theoretical maximum pip count per resource.
 local PIP_RESOURCES = {
     [4]  = 5,  -- Combo Points
-    [5]  = 6,  -- Runes (Death Knight)
     [7]  = 5,  -- Soul Shards
     [9]  = 5,  -- Holy Power
-    [12] = 5,  -- Chi
     [16] = 4,  -- Arcane Charges
-    [19] = 6,  -- Essence
     [26] = 10, -- Maelstrom Weapon
 }
 
 -- ClassPower uses string power types; map to the numeric IDs used by
 -- RESOURCE_COLORS and PIP_RESOURCES.
---
--- RUNES is NOT a ClassPower type — oUF's ClassPower element has no DEATHKNIGHT
--- branch (Libs/oUF/elements/classpower.lua:116-309) because runes are
--- cooldown-based rather than point-based, so oUF ships them as a separate
--- `Runes` element. The entry exists here purely so the rune path can reuse the
--- same geometry/color lookups; nothing in ClassPower ever produces it.
 local CLASSPOWER_TYPE_MAP = {
     COMBO_POINTS   = 4,
-    RUNES          = 5,
     SOUL_SHARDS    = 7,
     HOLY_POWER     = 9,
-    CHI            = 12,
     ARCANE_CHARGES = 16,
-    ESSENCE        = 19,
     MAELSTROM      = 26,
 }
 
-local RUNE_TYPE  = 5
-local RUNE_COUNT = 6
-
 -- ── Fractional pip fill ───────────────────────────────────────────────
--- Two pip resources can sit part-way between whole points:
+-- SOUL_SHARDS can sit part-way between whole points for Destruction, where a
+-- shard is 10 fragments. oUF ALREADY computes a fractional `cur` for that spec
+-- (classpower.lua:289, UnitPower(..., true) / UnitPowerDisplayMod); the plain
+-- `i <= cur` render simply discarded it.
 --
---   ESSENCE      - regenerates on a timer. ClassPower reports it as a whole
---                  number (classpower.lua:162-169 -> GetGenericPower), so the
---                  fraction comes from UnitPartialPower, read live.
---   SOUL_SHARDS  - Destruction only, where a shard is 10 fragments. oUF ALREADY
---                  computes a fractional `cur` for that spec (classpower.lua:289,
---                  UnitPower(..., true) / UnitPowerDisplayMod); the plain
---                  `i <= cur` render simply discarded it.
---
--- When one of these is active the per-pip StatusBars below own the bright fill
--- outright and _fill is demoted to the dim empty backing -- the same division
--- of labour the DK rune pips already use. Every other resource keeps the plain
--- two-state _fill and builds no StatusBars at all.
-local ESSENCE_TYPE  = 19
+-- When it is active the per-pip StatusBars below own the bright fill outright
+-- and _fill is demoted to the dim empty backing. Every other resource keeps
+-- the plain two-state _fill and builds no StatusBars at all.
 local SHARD_TYPE    = 7
-local ESSENCE_POWER = (Enum and Enum.PowerType and Enum.PowerType.Essence) or 19
-local ESSENCE_PARTIAL_MAX = 1000
 local SPEC_WARLOCK_DESTRUCTION = _G.SPEC_WARLOCK_DESTRUCTION or 3
 
 -- Soul Shards are only fractional for Destruction; Affliction and Demonology
 -- spend whole shards and never need the bars.
 local function PartialCapable(numericType)
-    if numericType == ESSENCE_TYPE then
-        return true
-    elseif numericType == SHARD_TYPE then
+    if numericType == SHARD_TYPE then
         return C_SpecializationInfo.GetSpecialization() == SPEC_WARLOCK_DESTRUCTION
     end
     return false
 end
 
--- Fill texture for pips and DK rune bars: follows the unit frames'
+-- Fill texture for pips: follows the unit frames'
 -- power bar texture setting (same expression as oUF_PowerBar.lua:228).
--- Applied at LAYOUT time only; the update paths (UpdateOUFResourceBar /
--- UpdateOUFRuneBar) touch color exclusively via SetVertexColor —
+-- Applied at LAYOUT time only; the update path (UpdateOUFResourceBar)
+-- touches color exclusively via SetVertexColor —
 -- SetColorTexture there would stomp the file texture back to a solid
 -- (Grid2 split: texture at layout, color on update).
 local function PowerBarFillTexture(p)
@@ -99,7 +70,7 @@ local function PowerBarFillTexture(p)
 end
 
 -- Rounded pip art (v59): the aura-icon treatment — STRETCHED (unsliced)
--- 256px IconMask clips each pip's fill (and the DK rune fill), and a
+-- 256px IconMask clips each pip's fill, and a
 -- stretched IconBorder ring is drawn just OUTSIDE the pip (the outer
 -- offset IS the visible side thickness — HET pattern; v59 rethin:
 -- Rounded offset 0.5, Rounded (Thick) offset 1). Same assets and
@@ -114,20 +85,6 @@ end
 local ROUND_PIP_RING_TEX       = "Interface\\AddOns\\BuzzardFrames\\Media\\IconBorder"
 local ROUND_PIP_RING_THICK_TEX = "Interface\\AddOns\\BuzzardFrames\\Media\\IconBorderThick"
 local ROUND_PIP_MASK_TEX       = "Interface\\AddOns\\BuzzardFrames\\Media\\IconMask"
-
--- Resolved on first use and cached. oUF itself calls UnitClassBase at file load
--- (classpower.lua:50), so load-time would very likely work too; this is just
--- belt-and-braces. The only real caller is BuildOUFResourceBar, which runs from
--- oUF:Factory (PLAYER_LOGIN or later) where the value is certainly valid.
-local isDK
-local function PlayerIsDK()
-    if isDK == nil then
-        local class = UnitClassBase("player")
-        if not class then return false end  -- too early; don't cache
-        isDK = (class == "DEATHKNIGHT")
-    end
-    return isDK
-end
 
 function BF:BuildOUFResourceBar()
     if self.oufResourceBar then return end
@@ -164,11 +121,6 @@ function BF:BuildOUFResourceBar()
     rb._barBorder = barBorderFrame
 
     rb._pips = {}
-    -- Death Knight only: StatusBars that oUF's Runes element owns and drives.
-    -- One per pip, filling that pip exactly, so ALL of the existing pip geometry
-    -- (width, gap, the last-pip TOPRIGHT anchor, borders) applies to runes for
-    -- free via _OUFResourceBarRebuildGeometry.
-    rb._runes = PlayerIsDK() and {} or nil
     local pipBaseLevel = rb:GetFrameLevel() + 1
     for i = 1, 10 do
         local pipFrame = CreateFrame("Frame", nil, rb)
@@ -180,22 +132,6 @@ function BF:BuildOUFResourceBar()
         fill:SetTexture("Interface\\Buttons\\WHITE8X8")
         fill:SetAllPoints(pipFrame)
         pipFrame._fill = fill
-
-        -- For a DK, _fill stays as the dim "empty" backing and this StatusBar
-        -- draws the bright portion on top, growing as the rune recharges. oUF
-        -- does the driving (runes.lua:140-149): a ready rune is SetValue(1) with
-        -- its OnUpdate detached; a recharging one gets an OnUpdate that ticks the
-        -- fill and is removed the moment it completes. We never poll.
-        if rb._runes and i <= RUNE_COUNT then
-            local sb = BF.StatusBar(nil, pipFrame)
-            sb:SetFrameLevel(pipBaseLevel + 1)  -- above _fill, below _border (+2)
-            sb:SetAllPoints(pipFrame)
-            sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-            sb:EnableMouse(false)
-            sb:SetMinMaxValues(0, 1)
-            sb:SetValue(1)
-            rb._runes[i] = sb
-        end
 
         local bf = CreateFrame("Frame", nil, pipFrame)
         bf:SetAllPoints(pipFrame)
@@ -231,23 +167,13 @@ function BF:BuildOUFResourceBar()
         rmask:SetAllPoints(pipFrame)
         rmask:Hide()
         fill:AddMaskTexture(rmask)
-        if rb._runes and rb._runes[i] then
-            -- DK: the oUF-driven rune StatusBar paints over _fill; its
-            -- fill texture needs the same rounded clip.
-            local runeFill = rb._runes[i]:GetStatusBarTexture()
-            if runeFill then runeFill:AddMaskTexture(rmask) end
-        end
         pipFrame._roundMask = rmask
         -- Regions the per-pip ROUNDED KIT mask must clip (same set the
         -- legacy stretched mask covered). Both masks can stay attached:
         -- a hidden mask is inert.
         pipFrame._bfPipMaskRegions = { fill }
-        if rb._runes and rb._runes[i] then
-            local runeFill = rb._runes[i]:GetStatusBarTexture()
-            if runeFill then pipFrame._bfPipMaskRegions[2] = runeFill end
-        end
 
-        -- Ring on the pip's border frame (above fill + rune bar), same
+        -- Ring on the pip's border frame (above the fill), same
         -- sublevel as the square edges so it layers identically.
         local rring = BF.Texture(bf, nil, "OVERLAY", nil, 3)
         rring:Hide()
@@ -294,11 +220,6 @@ function BF:BuildOUFResourceBar()
         self:_EnsureClassPowerHost()
     end
 
-    -- Attach the Runes element now that both the pips and a host exist. No-op
-    -- for non-DKs. If _EnsureClassPowerHost deferred to PLAYER_LOGIN there is no
-    -- host yet, and this no-ops; that path re-calls us once the host is spawned.
-    self:_EnsureRunesElement()
-
     self:ApplyOUFResourceBarLayout()
 end
 
@@ -315,10 +236,6 @@ function BF:_EnsureClassPowerHost()
         if not buildEvents:IsSubscribed("PLAYER_LOGIN") then
             buildEvents:SubOnce("PLAYER_LOGIN", function()
                 BF:_EnsureClassPowerHost()
-                -- Deferred path: the host did not exist when
-                -- BuildOUFResourceBar ran, so the runes element could not
-                -- be attached then.
-                BF:_EnsureRunesElement()
             end)
         end
         return
@@ -335,11 +252,11 @@ function BF:_EnsureClassPowerHost()
 end
 
 -- ============================================================
--- ClassPower / Runes ownership
+-- ClassPower ownership
 --
 -- oUF drops every element event on a frame that is not visible
 -- (Libs/oUF/events.lua onEvent gates on self:IsVisible()), so the frame that
--- owns ClassPower and Runes has to be one that is actually shown. That is the
+-- owns ClassPower has to be one that is actually shown. That is the
 -- oUF player frame when it is enabled, and the alpha-0 -- but shown --
 -- BuzzardFrames_ClassPowerHost when it is not: either showPlayerFrame is off,
 -- or the player raid-style twin has taken the frame's place (the twin carries
@@ -361,7 +278,7 @@ function BF:_ClassPowerOwner()
     return self.oufPlayer or self._classPowerHost
 end
 
--- Moves ClassPower and Runes onto whichever of the two frames is currently
+-- Moves ClassPower onto whichever of the two frames is currently
 -- shown. Idempotent, change-guarded, and only does anything once the oUF
 -- player frame exists -- when it does not, BuildOUFResourceBar's own
 -- `if not self.oufPlayer` host spawn already put them in the right place.
@@ -377,17 +294,10 @@ function BF:SyncClassPowerHost()
     if other == owner then other = nil end
 
     -- Give up the old owner first: two enabled ClassPower elements would both
-    -- feed BF:UpdateOUFResourceBar. Runes has to be disabled before its table
-    -- is unhooked -- oUF's Disable reads self.Runes to hide the pips.
+    -- feed BF:UpdateOUFResourceBar.
     if other and other.IsElementEnabled then
         if other:IsElementEnabled("ClassPower") then
             other:DisableElement("ClassPower")
-        end
-        if other.Runes then
-            if other:IsElementEnabled("Runes") then
-                other:DisableElement("Runes")
-            end
-            other.Runes = nil
         end
     end
 
@@ -397,155 +307,22 @@ function BF:SyncClassPowerHost()
             owner.ClassPower:ForceUpdate()
         end
     end
-    -- Re-attaches the pips to the new owner (no-op for non-DKs, and a no-op
-    -- when the owner already has them).
-    self:_EnsureRunesElement()
 end
 
 -- ============================================================
--- Runes (Death Knight)
---
--- oUF already implements the entire rune bar in Libs/oUF/elements/runes.lua:
--- cooldown reads, smooth recharge fill, per-rune OnUpdate attach/detach,
--- RUNE_POWER_UPDATE registration, sorting and spec coloring. It only needs a
--- table of StatusBars at frame.Runes; we supply the ones built into the pips.
---
--- The element cannot be attached in BuildClassPowerWidget (oUF_Shared.lua) the
--- way ClassPower is, because the pips live on oufResourceBar, which does not
--- exist at style time. Instead we attach after the bar is built and enable the
--- element explicitly — oUF supports post-spawn enabling (Libs/oUF/ouf.lua:93),
--- as already used for Castbar (oUF_Castbar.lua:537) and Power (oUF_Shared.lua:3133).
--- ============================================================
-function BF:_EnsureRunesElement()
-    if not PlayerIsDK() then return end
-    local rb = self.oufResourceBar
-    if not rb or not rb._runes then return end
-
-    local host = self:_ClassPowerOwner()
-    if not host then return end
-    if host.Runes then return end  -- already attached
-
-    local runes = rb._runes
-
-    -- oUF calls UpdateColor with the PARENT frame, not the element
-    -- (runes.lua:105-113), hence the `frame` parameter. Overriding it keeps BF's
-    -- profile color options authoritative instead of oUF's colors.power.RUNES.
-    runes.UpdateColor = function(frame)
-        local element = frame.Runes
-        if not element then return end
-        local p = BF.ufDB.profile
-        local rc
-        if p.oufResourceBarUseTypeColor ~= false then
-            rc = RESOURCE_COLORS[RUNE_TYPE]
-        else
-            rc = p.oufResourceBarColor or RESOURCE_COLORS[RUNE_TYPE]
-        end
-        for i = 1, #element do
-            element[i]:SetStatusBarColor(rc.r, rc.g, rc.b, 1)
-        end
-    end
-
-    -- Runes has no PostVisibility (unlike ClassPower), so the bar's show/hide
-    -- has to ride on PostUpdate — this is the only genuinely new logic.
-    runes.PostUpdate = function()
-        BF:UpdateOUFRuneBar()
-    end
-
-    host.Runes = runes
-    if host.EnableElement then
-        host:EnableElement("Runes", "player")
-    end
-    if host.Runes and host.Runes.ForceUpdate then
-        host.Runes:ForceUpdate()
-    end
-end
-
--- Rune equivalent of UpdateOUFResourceBar. oUF owns the fill values, so this
--- only handles what oUF does not: the profile enable gate, pip geometry, the
--- dim empty backing, and showing the bar.
-function BF:UpdateOUFRuneBar()
-    local rb = self.oufResourceBar
-    if not rb or not rb._runes then return end
-    local p = self.ufDB.profile
-
-    if p.oufResourceBarEnabled ~= true then
-        rb:Hide()
-        if rb._handle then rb._handle:Hide() end
-        return
-    end
-
-    -- oUF hides the individual rune bars in a vehicle (runes.lua:136-137) but
-    -- still calls PostUpdate, which would leave us showing an empty shell of dim
-    -- backing + borders. Every other class gets the bar hidden outright via
-    -- ClassPower's PostVisibility, so match that.
-    --
-    -- ...unless ClassPower is legitimately driving the bar. Its vehicle branch
-    -- (classpower.lua:438-443) has NO class check, so a DK in a vehicle that
-    -- grants combo points gets a real COMBO_POINTS bar. Runes' AllPath runs after
-    -- ClassPower's VisibilityPath in __elements (we EnableElement post-Spawn, so
-    -- we're appended later), and rune regen continues in vehicles, so an
-    -- unconditional Hide here would blank the combo bar on entry and re-blank it
-    -- on every RUNE_POWER_UPDATE. Return either way — we must not rebuild the
-    -- geometry to 6 rune pips over ClassPower's combo display.
-    if UnitHasVehicleUI("player") then
-        -- v67 / oUF 14.0.0: ClassPower.__isEnabled was internalised; ask oUF's
-        -- public element registry instead (BF:GetOUFClassPowerState).
-        local host = self:_ClassPowerOwner()
-        if not BF:GetOUFClassPowerState(host) then
-            rb:Hide()
-        end
-        return
-    end
-
-    if rb._lastPipCount ~= RUNE_COUNT or rb._lastPowerType ~= RUNE_TYPE then
-        rb._lastPipCount  = RUNE_COUNT
-        rb._lastPowerType = RUNE_TYPE
-        self:_OUFResourceBarRebuildGeometry()
-    end
-
-    local rc
-    if p.oufResourceBarUseTypeColor ~= false then
-        rc = RESOURCE_COLORS[RUNE_TYPE]
-    else
-        rc = p.oufResourceBarColor or RESOURCE_COLORS[RUNE_TYPE]
-    end
-    local showEmpty  = p.oufResourceBarShowEmpty ~= false
-    local dimFactor  = p.oufResourceBarEmptyDim or 0.2
-
-    -- _fill is the dim backing; the StatusBar oUF drives paints over it.
-    -- SetVertexColor, NOT SetColorTexture: the fill carries the power
-    -- bar texture (layout-time), which SetColorTexture would stomp.
-    for i = 1, RUNE_COUNT do
-        local pipFrame = rb._pips[i]
-        if pipFrame then
-            if showEmpty then
-                pipFrame._fill:SetVertexColor(rc.r * dimFactor, rc.g * dimFactor, rc.b * dimFactor, 0.8)
-            else
-                pipFrame._fill:SetVertexColor(0, 0, 0, 0)
-            end
-        end
-    end
-
-    rb:Show()
-end
-
--- ============================================================
--- Fractional pip fill (Essence recharge / Destruction shard fragments)
+-- Fractional pip fill (Destruction shard fragments)
 -- ============================================================
 
 -- One StatusBar per pip, built the first time a fractional resource is actually
 -- active and never rebuilt afterwards. Sits at pip level + 1 -- above _fill,
--- below _border at + 2 -- exactly where the rune bars sit, and carries the same
--- rounded-clip wiring.
+-- below _border at + 2 -- and carries the pips' rounded-clip wiring.
 --
 -- Pre-resolved per pip rather than one bar moved to whichever pip is part-full:
 -- rb is parented to the oUF player frame, protection is inherited by children,
 -- and a SetParent on a pip mid-combat is an action-blocked risk.
---
--- No-op for a DK: rb._runes already owns bars at that level.
 function BF:_EnsurePartialPipBars(numericType)
     local rb = self.oufResourceBar
-    if not rb or rb._runes or rb._partial then return end
+    if not rb or rb._partial then return end
 
     local cap = PIP_RESOURCES[numericType]
     if not cap then return end
@@ -586,7 +363,7 @@ end
 
 -- Spread a fractional resource total across the pips: pip i shows the part of
 -- `total` that falls between i-1 and i, so 2.7 lights two pips and fills the
--- third to 70%. One rule covers both resources and every pip state -- full,
+-- third to 70%. One rule covers every pip state -- full,
 -- part-full and empty -- so there is nothing to infer and no special case for
 -- the pip on the boundary.
 local function ApplyPartialFill(rb, total, count)
@@ -609,97 +386,10 @@ local function ApplyPartialFill(rb, total, count)
     end
 end
 
--- Essence as a single fractional number: whole essences plus progress toward
--- the next one, read from UnitPartialPower (0-1000 toward the next essence).
---
--- The one thing UnitPartialPower gets wrong is a SPEND: the game keeps the
--- progress already made toward the next essence, but the API restarts its count
--- from zero, which emptied the pip and then took a full recharge to refill it.
--- Since partial climbs by exactly 1 over one full recharge, carrying the
--- progress across the spend as a head start restores both -- the pip keeps its
--- fill, and it completes after exactly the time that was really left.
---
--- Returns nil when the values cannot be trusted, in which case the caller
--- leaves the display alone.
-local essLastCur   -- last whole-essence count seen, to spot spends and gains
-local essOffset = 0 -- progress carried across a spend
-local essFrac   = 0 -- fraction last shown, i.e. what a spend carries over
-
-local function EssenceTotal()
-    local cur = UnitPower("player", ESSENCE_POWER)
-    local max = UnitPowerMax("player", ESSENCE_POWER)
-    if not cur or not max or max == 0 then return nil end
-    if issecretvalue and (issecretvalue(cur) or issecretvalue(max)) then return nil end
-
-    if essLastCur then
-        if cur < essLastCur then
-            essOffset = essFrac      -- spent: keep what was on screen
-        elseif cur > essLastCur then
-            essOffset = 0            -- gained: the carry has been paid out
-        end
-    end
-    essLastCur = cur
-
-    -- At max nothing is charging, so drop any carry: spending from full has to
-    -- start a fresh recharge rather than inherit stale progress.
-    if cur >= max then
-        essOffset, essFrac = 0, 0
-        return cur, max
-    end
-
-    local partial = 0
-    if UnitPartialPower then
-        local raw = UnitPartialPower("player", ESSENCE_POWER)
-        if raw and not (issecretvalue and issecretvalue(raw)) then
-            partial = raw / ESSENCE_PARTIAL_MAX
-            if partial < 0 then partial = 0 end
-        end
-    end
-
-    local frac = partial + essOffset
-    if frac > 1 then frac = 1 end
-    essFrac = frac
-
-    return cur + frac, max
-end
-
-local partialFrame
-
--- Essence is the only resource here that moves between power events, so it is
--- the only one that needs a per-frame pass. Both halves of the total are
--- re-read every frame, so this can never disagree with the game state or race
--- the power event that ClassPower is handling: a spend, a gain and a tick all
--- just produce a new total on the next frame.
-local function PartialOnUpdate(self)
-    local rb = BF.oufResourceBar
-    if not rb or not rb._partial or not rb._partialLive then
-        self:SetScript("OnUpdate", nil)
-        return
-    end
-
-    local total, max = EssenceTotal()
-    if not total then return end
-
-    ApplyPartialFill(rb, total, rb._partialCount or 0)
-
-    -- Capped: nothing left to animate until the next power event brings us back.
-    if total >= max then
-        rb._partialLive = false
-        self:SetScript("OnUpdate", nil)
-    end
-end
-
-function BF:_EnsurePartialTicker()
-    if not partialFrame then partialFrame = CreateFrame("Frame") end
-    return partialFrame
-end
-
--- Stop the per-frame pass. The renderer owns Show/Hide; this only ends the
--- animation, and the next update re-arms it if the resource is still filling.
+-- Kept as the renderer's "stand down" hook; the fractional bars have no
+-- per-frame pass left to stop (that was Essence-only). Show/Hide stays with
+-- the renderer.
 function BF:_StopOUFPartialFill()
-    local rb = self.oufResourceBar
-    if rb then rb._partialLive = false end
-    if partialFrame then partialFrame:SetScript("OnUpdate", nil) end
 end
 
 function BF:_SnapOUFResourceBarHandle()
@@ -803,16 +493,11 @@ function BF:ApplyOUFResourceBarLayout()
         rb._bg:SetShown(p.oufResourceBarShowBg ~= false)
     end
 
-    -- Pip/rune fill texture (power bar texture setting). Layout-time
+    -- Pip fill texture (power bar texture setting). Layout-time
     -- only; update paths recolor via SetVertexColor/SetStatusBarColor.
     local fillTex = PowerBarFillTexture(p)
     for i = 1, 10 do
         rb._pips[i]._fill:SetTexture(fillTex)
-    end
-    if rb._runes then
-        for i = 1, RUNE_COUNT do
-            rb._runes[i]:SetStatusBarTexture(fillTex)
-        end
     end
     if rb._partial then
         for i = 1, #rb._partial do
@@ -834,18 +519,6 @@ function BF:ApplyOUFResourceBarLayout()
     if cpOn then
         rb:Show()
         self:UpdateOUFResourceBar(cpCur, cpMax, cpType)
-    elseif host and host.IsElementEnabled and host:IsElementEnabled("Runes") then
-        -- DK: ClassPower is never enabled for us (oUF has no DEATHKNIGHT branch),
-        -- so without this the bar stays hidden until the next RUNE_POWER_UPDATE.
-        -- NOTE: do NOT test Runes.__isEnabled here — that field is not part of
-        -- oUF's element contract. Only classpower.lua and additionalpower.lua set
-        -- it; runes.lua's Enable (runes.lua:199-223) sets __owner and ForceUpdate
-        -- only, so __isEnabled would be nil forever and this branch dead.
-        -- IsElementEnabled reads oUF's activeElements, which EnableElement
-        -- populates (Libs/oUF/ouf.lua:100-101). Same idiom as oUF_Castbar.lua:519.
-        -- ForceUpdate re-runs oUF's rune update, whose PostUpdate calls
-        -- UpdateOUFRuneBar and shows the bar.
-        if host.Runes and host.Runes.ForceUpdate then host.Runes:ForceUpdate() end
     end
 end
 
@@ -1074,16 +747,6 @@ function BF:UpdateOUFResourceBarVisibility(isVisible)
         return
     end
 
-    -- On a DK the Runes element owns this bar; ClassPower must not touch it.
-    -- ClassPower's Enable has NO class check (classpower.lua:562-589), so it
-    -- activates for a DK too, immediately finds no matching playerClass branch
-    -- (classpower.lua:116-309), resolves powerType = nil, and fires
-    -- PostVisibility(false) -> here -> rb:Hide(). Today that only fails to break
-    -- runes because of statement ordering (rb is still nil on the oufPlayer path;
-    -- on the _classPowerHost path _EnsureRunesElement's ForceUpdate happens to
-    -- re-show it a few lines later). Ignore it explicitly rather than rely on that.
-    if rb._runes then return end
-
     if not isVisible then
         self:_StopOUFPartialFill()
         rb:Hide()
@@ -1164,23 +827,12 @@ function BF:UpdateOUFResourceBar(cur, max, powerType)
 
     if rb._partial then
         if fractional then
-            -- Essence needs its fraction fetched; Destruction's already rode in
-            -- on `cur`. A total below max means it is still filling, which is
-            -- the only thing that warrants a per-frame pass.
-            local total, live = cur, false
-            if numericType == ESSENCE_TYPE then
-                local t, m = EssenceTotal()
-                if t then total, live = t, t < m end
-            end
-
+            -- Destruction's fraction already rode in on `cur`.
             for i = 1, #rb._partial do
                 rb._partial[i]:SetStatusBarColor(rc.r, rc.g, rc.b, 1)
             end
             rb._partialCount = pipMax
-            rb._partialLive  = live
-            ApplyPartialFill(rb, total, pipMax)
-
-            self:_EnsurePartialTicker():SetScript("OnUpdate", live and PartialOnUpdate or nil)
+            ApplyPartialFill(rb, cur, pipMax)
         else
             -- Bars exist but this resource has no fraction (spec swap, or the
             -- option was turned off): stand them down and let _fill render.

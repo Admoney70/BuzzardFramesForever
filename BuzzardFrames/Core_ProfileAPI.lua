@@ -2148,7 +2148,7 @@ end
 -- Colors and shared with the oUF frames).
 -- ============================================================
 BF.SECTION_SUBTABS = {
-    text        = { "names", "healthText", "statusText", "levelText", "labels", "vehicle" },
+    text        = { "names", "healthText", "statusText", "levelText", "labels" },
     icons       = { "roleIcons", "raidTarget", "pingIndicator", "leaderAssistant", "missingRaidBuff", "statusIcons" },
     borders     = { "border", "targetHighlight", "mouseover", "aggro" },
     healthPower = { "health", "background", "status", "power", "range" },
@@ -2181,9 +2181,6 @@ BF.SECTION_SUBTAB_KEYS = {
         labels = { "showGroupLabels", "groupLabelColor", "groupLabelYOffset",
             "groupLabelNumberOnly", "adjustGroupLabelFont", "groupLabelFont",
             "groupLabelFontBorder", "groupLabelFontSize" },
-        vehicle = { "showVehicleName", "abbreviateVehicleNames",
-            "maxVehicleNameChars", "adjustVehicleFont", "vehicleFont",
-            "vehicleFontBorder", "vehicleFontSize", "vehicleNamePosition" },
     },
     icons = {
         roleIcons = { "showRoleIcons", "roleIconStyle", "roleIconSize",
@@ -2226,7 +2223,7 @@ BF.SECTION_SUBTAB_KEYS = {
             "fadeOfflineFrames", "useCustomDeadColor", "deadBackgroundColor",
             "deadBackgroundOpacity", "useCustomHostileColor", "hostileColor" },
         power = { "showAllPowerBars", "showPowerBarHealers",
-            "showPowerBarBloodDK", "powerBarHeight", "aurasAbovePowerBar",
+            "powerBarHeight", "aurasAbovePowerBar",
             "useCustomPowerBarBgColor", "powerBarBgColor", "powerBarBgOpacity",
             "useCustomPowerBarTexture", "powerBarTexture" },
         range = { "enableRangeFade", "rangeFadeAlpha", "enableRangeDesaturate",
@@ -3167,16 +3164,10 @@ BF.PowerTypeColors = {
     FOCUS        = { r = 1.00, g = 0.64, b = 0.07 },
     ENERGY       = { r = 0.79, g = 0.67, b = 0.20 },
     COMBO_POINTS = { r = 1.00, g = 0.91, b = 0.27 },
-    RUNES        = { r = 0.77, g = 0.12, b = 0.23 },
-    RUNIC_POWER  = { r = 0.00, g = 0.82, b = 1.00 },
     SOUL_SHARDS  = { r = 0.58, g = 0.51, b = 0.79 },
     LUNAR_POWER  = { r = 0.32, g = 0.22, b = 0.95 },  -- Astral Power
     HOLY_POWER   = { r = 0.95, g = 0.87, b = 0.35 },
     MAELSTROM    = { r = 0.00, g = 0.50, b = 1.00 },
-    INSANITY     = { r = 0.40, g = 0.00, b = 0.80 },
-    FURY         = { r = 0.78, g = 0.25, b = 0.14 },
-    PAIN         = { r = 0.73, g = 0.46, b = 0.82 },
-    ESSENCE      = { r = 0.40, g = 0.80, b = 0.60 },
     -- Non-standard tokens returned by UnitPowerType() for friendly NPCs
     -- in follower dungeons and proving grounds (Grid2 StatusMana.lua pattern)
     POWER_TYPE_FOCUS     = { r = 1.00, g = 0.64, b = 0.07 },  -- same as FOCUS

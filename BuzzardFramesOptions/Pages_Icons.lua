@@ -232,10 +232,6 @@ local STATUS_ICONS = {
       -- decide whether the preview frame carries the pending icon, so this
       -- one needs the status refresh as well as the icon one.
       extra = "RefreshPreviewStatus" },
-    { key = "showVehicleIcon",      test = "testVehicleIcon",
-      label = "Show Vehicle Icon",  update = "UpdateVehicle",
-      desc = "Show an icon when a unit is in a vehicle.",
-      testLabel = "Test Vehicle Icon" },
 }
 
 local function StatusIconShown(entry)
@@ -677,10 +673,6 @@ function PAGES.missingRaidBuff()
               text = "Since Patch 12.1 the Missing Raid Buff icon can only be "
                   .. "shown |cffffff00out of combat|r." },
         }},
-        -- The Symbiotic toggle is INSIDE the card but not gated by its
-        -- header: it is a second, independent reason for the indicator to
-        -- appear, exactly as it is in the Ace page, where the size and
-        -- position groups show if EITHER is on.
         { title = "Missing Raid Buff", preset = "form",
           toggle = Gate("showMissingRaidBuff", "Show Missing Raid Buff",
                         MissingRaidBuffTrackers),
@@ -697,14 +689,6 @@ function PAGES.missingRaidBuff()
                         y     = "missingRaidBuffOffsetY" },
               min = -60, max = 60,
               onChange = MissingRaidBuffLook, disabled = "combat" },
-        }},
-        { title = "Symbiotic Relationship", preset = "form", fields = {
-            Sw("showMissingSymbiotic", "Show Missing Symbiotic Relationship (Druid)",
-               MissingRaidBuffTrackers,
-               { wide = true,
-                 desc = "Show an indicator on the player frame when you have the "
-                     .. "Symbiotic Relationship talent but are missing the "
-                     .. "personal buff it grants." }),
         }},
     }
 end

@@ -690,7 +690,6 @@ BF.raidPartyFrameDefaults = {
             showPowerBar        = false,   -- legacy, kept for backward compat
             showAllPowerBars    = false,
             showPowerBarHealers = false,
-            showPowerBarBloodDK = false,
             powerBarHeight      = 4,
             useCustomPowerBarTexture = false,
             powerBarTexture     = "Blizzard Raid Bar",

@@ -288,11 +288,6 @@ local function LevelColorToggled()
     LevelTextUpdate()
 end
 
-local function VehicleUpdate()
-    ForEachFrame(function(bf, f)
-        if bf.UpdateVehicle then bf:UpdateVehicle(f) end
-    end)
-end
 
 -- Raid group labels, debounced under the SAME key the Ace page uses.
 local function GroupLabels()
@@ -758,20 +753,19 @@ local function Gate(key, tooltip, effect, desc)
     }
 end
 
--- ── The six pages ──────────────────────────────────────────────
+-- ── The five pages ──────────────────────────────────────────────
 --
 -- Published so Panel.lua builds the route children from the same list that
 -- builds the pages: the ids ARE the subtab ids in BF.SECTION_SUBTABS.text,
 -- so the per-Layout toggles line up by construction rather than by a table
 -- somebody has to keep in step. The order is the Ace tab order (names 1,
--- healthText 2, statusText 2.5, levelText 2.7, labels 3, vehicle 4).
+-- healthText 2, statusText 2.5, levelText 2.7, labels 3).
 BuzzardFramesOptions.TEXT_SUBTABS = {
     { id = "names",      title = "Names" },
     { id = "healthText", title = "Health Text" },
     { id = "statusText", title = "Status Text" },
     { id = "levelText",  title = "Level Text" },
     { id = "labels",     title = "Raid Group Labels" },
-    { id = "vehicle",    title = "Vehicle" },
 }
 
 local PAGES = {}
@@ -1237,67 +1231,6 @@ function PAGES.labels()
                { hidden = function()
                      return noShow() or not StrictGroupLayoutOn()
                          or not TPv("adjustGroupLabelFont")
-                 end }),
-        }},
-    }
-end
-
--- Vehicle. Ace order: vehicleNameHeader, showVehicleName (2),
--- vehicleNamePosition (3), vehicleFontGroup (5.5),
--- abbreviateVehicleNamesGroup (6). The three groups after the toggle are
--- whole Ace groups hidden unless showVehicleName; the predicate rides
--- their fields.
-function PAGES.vehicle()
-    local noShow = function() return not TPv("showVehicleName") end
-    local showDisabled = function()
-        return InCombatLockdown() or not TPv("showVehicleName")
-    end
-    return {
-        { title = "Vehicle Name Text", preset = "form", fields = {
-            Sw("showVehicleName", "Show Vehicle Name", VehicleUpdate,
-               { desc = "Show the vehicle name on the frame when a unit is "
-                     .. "in a vehicle." }),
-        }},
-        -- vehicleNamePosition: a nested table, so the pad binds through
-        -- the SubTable wrapper (the Ace point/x/y selects).
-        { title = "Vehicle Name Position", preset = "form", fields = {
-            Pos({ point = "vehicleNamePosition.point",
-                  x     = "vehicleNamePosition.x",
-                  y     = "vehicleNamePosition.y" },
-                "Location", LayoutFrames,
-                { hidden = noShow, disabled = showDisabled }),
-        }},
-        -- vehicleFontGroup.
-        { title = "Vehicle Name Font", preset = "form", fields = {
-            Sw("adjustVehicleFont", "Adjust Vehicle Font", LayoutFrames,
-               { desc = "Enable custom font, border style, and size for "
-                     .. "vehicle name text",
-                 hidden = noShow }),
-            Dd("vehicleFont", "Font", FontOptions, LayoutFrames,
-               { desc = "Choose a font for vehicle name text",
-                 hidden = function()
-                     return noShow() or not TPv("adjustVehicleFont")
-                 end }),
-            Dd("vehicleFontBorder", "Font Border", FONT_BORDER_OPTIONS,
-               LayoutFrames,
-               { desc = "Choose an outline/border style for vehicle name text",
-                 hidden = function()
-                     return noShow() or not TPv("adjustVehicleFont")
-                 end }),
-            Sl("vehicleFontSize", "Font Size", 6, 30, LayoutFrames,
-               { hidden = function()
-                     return noShow() or not TPv("adjustVehicleFont")
-                 end }),
-        }},
-        -- abbreviateVehicleNamesGroup. maxVehicleNameChars has NO side
-        -- effect in Ace -- the next vehicle update reads it -- so it
-        -- declares no onChange here either.
-        { title = "Abbreviate Vehicle Names", preset = "form", fields = {
-            Sw("abbreviateVehicleNames", "Abbreviate Long Vehicle Names",
-               VehicleUpdate, { hidden = noShow }),
-            Sl("maxVehicleNameChars", "Max Vehicle Name Length", 3, 20, nil,
-               { hidden = function()
-                     return noShow() or not TPv("abbreviateVehicleNames")
                  end }),
         }},
     }

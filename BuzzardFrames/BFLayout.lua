@@ -1709,11 +1709,11 @@ function BF:FixHeaderAttributes(header, index)
     -- (matching Grid2's FixHeaderAttributes behavior).
     if header:GetAttribute("strictFiltering") and gf then
         -- Only append if classes aren't already present (avoid double-appending)
-        if not gf:find("DEATHKNIGHT") then
+        if not gf:find("DRUID") then
             local classStr = header._classString
             if not classStr or classStr == "" then
                 -- Fallback: append all classes (Grid2 default behavior)
-                classStr = "DEATHKNIGHT,DEMONHUNTER,DRUID,EVOKER,HUNTER,MAGE,MONK,PALADIN,PRIEST,ROGUE,SHAMAN,WARLOCK,WARRIOR"
+                classStr = "DRUID,HUNTER,MAGE,PALADIN,PRIEST,ROGUE,SHAMAN,WARLOCK,WARRIOR"
             end
             gf = gf .. "," .. classStr
             header:SetAttribute("groupFilter", gf)
@@ -1796,7 +1796,7 @@ function BF:FixHeaderAttributes(header, index)
             header:SetAttribute("sortMethod", "NAME")
         elseif sortBy == "CLASS" then
             header:SetAttribute("groupBy", "CLASS")
-            header:SetAttribute("groupingOrder", "DEATHKNIGHT,DEMONHUNTER,DRUID,EVOKER,HUNTER,MAGE,MONK,PALADIN,PRIEST,ROGUE,SHAMAN,WARLOCK,WARRIOR")
+            header:SetAttribute("groupingOrder", "DRUID,HUNTER,MAGE,PALADIN,PRIEST,ROGUE,SHAMAN,WARLOCK,WARRIOR")
             header:SetAttribute("sortMethod", "NAME")
         end
     end

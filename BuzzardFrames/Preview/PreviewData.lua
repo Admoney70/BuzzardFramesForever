@@ -117,7 +117,7 @@ local CF_FAKE_UNIT_DEFAULTS = {
     { name = "CFBuzzard1", class = "PALADIN",     hp = 0.90, role = "TANK"    },
     { name = "CFBuzzard2", class = "DRUID",        hp = 0.65, role = "HEALER"  },
     { name = "CFBuzzard3", class = "ROGUE",        hp = 0.45, role = "DAMAGER" },
-    { name = "CFBuzzard4", class = "DEATHKNIGHT",  hp = 0.30, role = "TANK"    },
+    { name = "CFBuzzard4", class = "WARRIOR",      hp = 0.30, role = "TANK"    },
 }
 
 -- FAKE UNIT DATA
@@ -142,13 +142,13 @@ local PREVIEW_UNIT_DEFAULTS = {
     { name = "Partybuzzard", class = "WARRIOR",     role = "TANK",    hp = 0.75 },
     { name = "Buzzardsham",  class = "SHAMAN",      role = "DAMAGER", hp = 0.20 },
     { name = "Holybuzzard",  class = "PRIEST",      role = "HEALER",  hp = 0.40 },
-    { name = "Buzzardk",     class = "DEATHKNIGHT", role = "TANK",    hp = 0.53 },
+    { name = "Buzzardruid",  class = "DRUID",       role = "TANK",    hp = 0.53 },
     { name = "Bluzzard",     class = "MAGE",        role = "DAMAGER", hp = 0.65 },
-    { name = "Buzzweaver",   class = "MONK",        role = "HEALER",  hp = 0.82 },
+    { name = "Buzzweaver",   class = "DRUID",       role = "HEALER",  hp = 0.82 },
     { name = "Buzzlightyr",  class = "PALADIN",     role = "TANK",    hp = 0.13 },
     { name = "Demobuzzard",  class = "WARLOCK",     role = "DAMAGER", hp = 0.44 },
-    { name = "Buzzardragon", class = "EVOKER",      role = "HEALER",  hp = 0.74 },
-    { name = "Buzzilidan",   class = "DEMONHUNTER", role = "TANK",    hp = 0.50 },
+    { name = "Buzzardpally", class = "PALADIN",     role = "HEALER",  hp = 0.74 },
+    { name = "Buzzhunter",   class = "HUNTER",      role = "DAMAGER", hp = 0.50 },
 }
 local PREVIEW_UNIT_DEFAULTS_COUNT = #PREVIEW_UNIT_DEFAULTS
 
@@ -543,7 +543,6 @@ local function ApplyPreviewPowerBar(frame, isRaid, p, tier)
         showPower = true
     else
         if _rp_healthPower().showPowerBarHealers and unit.role == "HEALER" then showPower = true end
-        if _rp_healthPower().showPowerBarBloodDK and unit.class == "DEATHKNIGHT" and unit.role == "TANK" then showPower = true end
     end
     -- Container and health bar must be re-anchored based on power bar visibility
     -- because preview frames have no unit, so Container:Layout always sets
