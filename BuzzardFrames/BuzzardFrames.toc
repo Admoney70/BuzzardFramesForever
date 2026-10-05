@@ -15,6 +15,10 @@
 ## AddonCompartmentFuncOnEnter: BuzzardFrames_AddonCompartmentFuncOnEnter
 ## AddonCompartmentFuncOnLeave: BuzzardFrames_AddonCompartmentFuncOnLeave
 
+# WoW Forever spec-API shim. FIRST, before the libraries: oUF and several
+# BuzzardFrames files read these globals (some into load-time locals).
+Compat.lua
+
 # Libraries
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
