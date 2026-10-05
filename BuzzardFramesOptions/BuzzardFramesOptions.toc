@@ -1,0 +1,124 @@
+## Interface: 120100
+## Title: |cff11ace9Buzzard Frames|r Options
+## Notes: The new options panel for Buzzard Frames. Loads on demand, the first time options are opened.
+## Author: Serina
+## Version: 1.0
+## X-Category: UI
+# The same icon Buzzard Frames wears in the AddOn list, so the pair reads
+# as one addon. The path crosses into the BuzzardFrames folder, which is
+# safe: this addon hard-depends on it, so the file is always there.
+## IconTexture: Interface\AddOns\BuzzardFrames\Media\buzzardRes
+
+# Loaded ON DEMAND, by BuzzardFrames, the first time the panel is opened.
+#
+# The library and the panel are a meaningful amount of code to parse,
+# and a reader who never opens the options never pays for it. Nothing
+# here runs at login.
+## LoadOnDemand: 1
+
+# BuzzardFrames must be present and loaded FIRST: everything here reads its
+# saved variables and calls its API, and this addon owns no SavedVariables
+# of its own -- geometry included, which lives in BuzzardFrames' db.global.
+## Dependencies: BuzzardFrames
+
+# The panel library, vendored into Libs as an embedded library. It brings
+# no LibStub of its own -- BuzzardFrames' is the only copy, and it is
+# already loaded by the time this addon does -- and no .toc; the order
+# below comes from the library's own .toc. Regenerate with
+# Tools\vendor_buzzardpanel.py rather than editing the copy.
+Libs\BuzzardPanel\BuzzardPanel.xml
+
+# The panel itself, then its pages. Panel.lua publishes the addon table
+# and must come first: every page file hangs its builder off it.
+#
+# The pages after it are in ROUTE order rather than the order they were
+# written, so this list reads as the tree does. Order is not otherwise
+# load-bearing between them: each one only adds a method to the table
+# Panel.lua published, and nothing is called until the panel is opened.
+Panel.lua
+Pages_Testing.lua
+
+# The border style control, shared by every page that draws one: the six
+# of them stored the same four values and offered the same list, with the
+# rounded frame's WEIGHT sitting in it as if it were a shape. Defines no
+# page of its own.
+Pages_BorderStyle.lua
+
+# Raid / Party Frames
+Pages_RaidPartyGeneral.lua
+Pages_Frames.lua
+Pages_Sorting.lua
+
+# The aura pages. Pages_AuraShared.lua holds the storage routing, the
+# scoped refresh and the per-subtab per-Layout strip that all three of
+# them use; it defines no page of its own. Load order between them does
+# not matter -- each only adds a method to the table Panel.lua published,
+# and nothing runs until the panel is opened -- but the shared file is
+# listed first because that is the order it reads in.
+Pages_AuraShared.lua
+Pages_Buffs.lua
+Pages_Debuffs.lua
+# The Buff List entry's four visual subtabs (Icon, Icon Effects, Cooldown
+# Text, Frame Effects), which Pages_AuraContainers.lua asks for when it
+# builds an entry's page.
+Pages_SingleBuffVisuals.lua
+Pages_AuraContainers.lua
+
+Pages_AuraText.lua
+Pages_Text.lua
+Pages_HealthPower.lua
+Pages_Borders.lua
+Pages_Absorbs.lua
+Pages_Icons.lua
+Pages_CastBar.lua
+Pages_Tooltips.lua
+Pages_Layouts.lua
+Pages_Preview.lua
+
+# Custom Frame Groups. LAST of the Raid/Party group on purpose: these two
+# render the page builders above against a custom frame group's own flat,
+# so they read after the files they route. Nothing here is CALLED at load
+# -- the section files resolve every builder by name, at the moment a route
+# is opened -- but the order is the order a reader should meet them in.
+#
+# Pages_CustomFrameSections.lua first: it defines BuzzardFramesOptions:BF(),
+# the accessor every page file above now goes through, and the assembler
+# Pages_CustomFrames.lua's own pages are put together by.
+Pages_CustomFrameSections.lua
+Pages_CustomFrames.lua
+
+# Unit Frames. Pages_UnitFramesShared.lua first: it holds the write-through
+# root, the relayout helpers and the four subtabs both the player and the
+# target carry, and the two files after it hang their pages off it.
+# Pages_UnitFramesGeneral.lua publishes UnitFramesOff, which Panel.lua's
+# route builder asks before it declares this section's children -- but that
+# is a runtime call, so the order here is for the reader.
+Pages_UnitFramesShared.lua
+Pages_UnitFramesGeneral.lua
+Pages_UnitFramesPlayer.lua
+Pages_UnitFramesTarget.lua
+Pages_UnitFramesOther.lua
+Pages_UFLayouts.lua
+
+# Incoming Casts
+Pages_IncomingCasts.lua
+
+# Profiles. Pages_ProfilesShared.lua first: it carries the import pipeline
+# (the legacy decoders, the decode/import state, the copy window) that the
+# Import and Export tabs run, and defines no page of its own.
+Pages_ProfilesShared.lua
+Pages_Profiles.lua
+
+# Global Styles. Pages_GlobalStylesShared.lua first: it carries the write
+# fan-out every Global Styles field pushes through (one write lands on the
+# Raid/Party global section, every Layout, every custom frame group and the
+# unit frames) and the "Apply Changes To" card, and defines no page of its
+# own. The page files after it are in the section's own tree order.
+Pages_GlobalStylesShared.lua
+Pages_Colors.lua
+Pages_GlobalStylesHealth.lua
+Pages_GlobalStylesBorders.lua
+Pages_GlobalStylesAbsorbs.lua
+Pages_GlobalStylesIcons.lua
+Pages_GlobalStylesText.lua
+Pages_GlobalStylesAuras.lua
