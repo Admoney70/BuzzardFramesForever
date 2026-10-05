@@ -1738,6 +1738,10 @@ local function BluzzardStyle(self, unit)
     -- Set an initial color so the bar is never white before oUF's first color pass
     Power:SetStatusBarColor(0.00, 0.44, 1.00)
     Power.colorPower = false  -- we manage color entirely in PostUpdate via _GetOUFPowerColor
+    -- Forever: UNIT_POWER_UPDATE only fires on the server's regen ticks, so
+    -- energy/mana stepped in ~2s jumps. UNIT_POWER_FREQUENT (what the detached
+    -- bar already uses) fires on every client-side change.
+    Power.frequentUpdates = true
 
     local powerBg = BF.Texture(Power, nil, "BACKGROUND")
     powerBg:SetAllPoints(Power)
