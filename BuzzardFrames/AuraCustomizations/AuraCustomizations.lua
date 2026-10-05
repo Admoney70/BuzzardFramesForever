@@ -4333,7 +4333,11 @@ BF.BUFFS_PRESET_ORDER = {
 -- Exactly ONE preset applies at a time. That is the change from the earlier
 -- set-of-presets model: a filter is a single choice, and combining several was
 -- expressive but had no way to say "this one instead of that one on this spec".
-BF.BUFFS_DEFAULT_PRESET = "player_raid_combat"
+-- Forever: plain HELPFUL|PLAYER. The retail default (player_raid_combat)
+-- leans on the per-spell "show in raid frames in combat" flag, which the
+-- Classic-era spell data Forever ships does not reliably carry, and that left
+-- the buff row empty.
+BF.BUFFS_DEFAULT_PRESET = "helpful_player"
 
 function BF:GetBuffsGlobalPreset()
     local t = self:GetBuffsPresetContainer()
@@ -4462,13 +4466,30 @@ local function EnsureBuffsPresetsSeeded(p)
     -- means a deliberate choice, including one deliberately set to something
     -- other than "none". `_present` is what makes an override visible and
     -- editable in the overrides tree, so both entries show up in the UI.
+    --
+    -- Forever: NOT seeded. "none" means "whitelist only", and the whitelist is
+    -- the curated retail healer spell list (BF.SPEC_SPELLS), whose IDs do not
+    -- match Forever's spells -- so a healer saw no buffs at all. The flag is
+    -- still set so the seed never runs later.
     if not p._buffsHealerNoneOverridesSeeded then
         p._buffsHealerNoneOverridesSeeded = true
         t.roleOverrides = t.roleOverrides or {}
-        if type(t.roleOverrides.HEALER) ~= "table" then
-            t.roleOverrides.HEALER = { preset = "none", _present = true }
-        end
         t.specOverrides = t.specOverrides or {}
+    end
+
+    -- Forever seed (own flag, runs once per profile): undo the two retail
+    -- defaults above on profiles that already received them, but ONLY where
+    -- the value is still exactly what the seed wrote -- anything the user
+    -- picked themselves is left alone.
+    if not p._buffsPresetsForever1 then
+        p._buffsPresetsForever1 = true
+        if t.globalPreset == "player_raid_combat" then
+            t.globalPreset = BF.BUFFS_DEFAULT_PRESET
+        end
+        local h = t.roleOverrides and t.roleOverrides.HEALER
+        if type(h) == "table" and h.preset == "none" then
+            t.roleOverrides.HEALER = nil
+        end
     end
 end
 BF.EnsureBuffsPresetsSeeded = EnsureBuffsPresetsSeeded
