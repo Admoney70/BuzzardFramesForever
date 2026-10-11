@@ -10,10 +10,17 @@
 --      log; registration is tried under pcall, and the source only counts
 --      as live once an event actually arrives.
 --   2. UNIT_COMBAT -- the unit's own feedback event (what Blizzard's
---      portrait feedback text uses). No caster, so every heal on the unit
---      shows, HoT ticks included; used until (or unless) the combat log is
---      seen working. Its amount may be a secret value on this engine, so
---      it is only ever handed to the FontString, never computed with.
+--      portrait feedback text uses); used until (or unless) the combat log
+--      is seen working. It names no caster and no spell, and a HoT tick
+--      looks exactly like a direct heal, so two things are rebuilt around it:
+--        * Direct heals: each of the player's own direct-heal casts
+--          (UNIT_SPELLCAST_SUCCEEDED) grants a short window in which that
+--          many heal events may show. With HoT ticks off, only heals that
+--          land inside such a window show -- your direct heals.
+--        * Overhealing: estimated from the unit's health just before the
+--          heal (cached from UNIT_HEALTH) against its max health.
+--      Any secret value on this engine is only ever handed to the
+--      FontString, never computed with.
 --
 -- Settings live in their own small AceDB (BuzzardFramesHealTextDB), one
 -- account-wide profile, edited from the options panel's "Heal Text" page.
@@ -23,6 +30,10 @@ local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
 local CreateFrame   = CreateFrame
 local UnitGUID      = UnitGUID
 local UnitExists    = UnitExists
+local UnitHealth    = UnitHealth
+local UnitHealthMax = UnitHealthMax
+local GetTime       = GetTime
+local math_min      = math.min
 local pcall         = pcall
 local type          = type
 local tostring      = tostring
@@ -45,6 +56,8 @@ BF.healTextDefaults = {
         biggerCrits  = true,
         raidParty    = true,
         unitFrames   = true,
+        font         = "Friz Quadrata TT",
+        fontOutline  = "OUTLINE",
         fontSize     = 14,
         yOffset      = 0,
         duration     = 1.5,
@@ -76,12 +89,18 @@ local function FormatAmount(n)
     return tostring(n)
 end
 
+local LSM = LibStub("LibSharedMedia-3.0", true)
+
 local function ApplyFont(fs, cfg, crit)
     local size = cfg.fontSize or 14
     if crit and cfg.biggerCrits then size = math_floor(size * 1.35 + 0.5) end
-    if fs._bfSize ~= size then
-        fs:SetFont(STANDARD_TEXT_FONT, size, "OUTLINE")
-        fs._bfSize = size
+    local path = (LSM and cfg.font and LSM:Fetch("font", cfg.font, true)) or STANDARD_TEXT_FONT
+    local outline = cfg.fontOutline or "OUTLINE"
+    if fs._bfSize ~= size or fs._bfPath ~= path or fs._bfOutline ~= outline then
+        if not fs:SetFont(path, size, outline) then
+            fs:SetFont(STANDARD_TEXT_FONT, size, outline)
+        end
+        fs._bfSize, fs._bfPath, fs._bfOutline = size, path, outline
     end
 end
 
@@ -198,6 +217,8 @@ local function OnCombatLog()
         -- The combat log works: retire the fallback.
         cleuAlive = true
         eventFrame:UnregisterEvent("UNIT_COMBAT")
+        eventFrame:UnregisterEvent("UNIT_HEALTH")
+        eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
     end
     if sub ~= "SPELL_HEAL" and sub ~= "SPELL_PERIODIC_HEAL" then return end
     local cfg = Cfg()
@@ -224,13 +245,126 @@ local function OnCombatLog()
     ForEachFrame(dstGUID, true, function(f) Show(f, text, amount, crit) end)
 end
 
+-- ── UNIT_COMBAT helpers: direct-heal credits and overheal estimate ──
+
+-- The player's direct heals, by name, with how many targets one cast can
+-- land on. Names rather than IDs: Forever's spell IDs (and ranks) are not
+-- the retail ones, and every rank shares its name.
+local DIRECT_HEALS = {
+    ["Healing Touch"] = 1, ["Regrowth"] = 1, ["Swiftmend"] = 1,
+    ["Healing Wave"] = 1, ["Lesser Healing Wave"] = 1, ["Chain Heal"] = 3,
+    ["Holy Light"] = 1, ["Flash of Light"] = 1, ["Holy Shock"] = 1,
+    ["Lay on Hands"] = 1,
+    ["Lesser Heal"] = 1, ["Heal"] = 1, ["Greater Heal"] = 1,
+    ["Flash Heal"] = 1, ["Prayer of Healing"] = 5, ["Holy Nova"] = 5,
+    ["Desperate Prayer"] = 1,
+}
+local CREDIT_WINDOW = 1.0   -- seconds from cast success to the heal landing
+local credits = {}          -- { expires, left, seen = { [key] = time } }
+
+local function SpellNameOf(spellID)
+    if not spellID or issecretvalue(spellID) then return nil end
+    local name
+    if C_Spell and C_Spell.GetSpellName then
+        name = C_Spell.GetSpellName(spellID)
+    elseif GetSpellInfo then
+        name = GetSpellInfo(spellID)
+    end
+    if name and not issecretvalue(name) then return name end
+end
+
+local function OnPlayerCast(spellID)
+    local n = DIRECT_HEALS[SpellNameOf(spellID) or ""]
+    if not n then return end
+    credits[#credits + 1] = { expires = GetTime() + CREDIT_WINDOW, left = n, seen = {} }
+end
+
+-- The same heal reaches UNIT_COMBAT once per token naming the unit
+-- (party1 AND target, say), all in one frame: a unit already counted
+-- against a credit in THIS frame passes again without using it up.
+local function UnitKey(unit)
+    local ok, guid = pcall(UnitGUID, unit)
+    if ok and guid and not issecretvalue(guid) then return guid end
+    return unit
+end
+
+local function TakeCredit(unit)
+    local now, key = GetTime(), UnitKey(unit)
+    local i = 1
+    while i <= #credits do
+        local c = credits[i]
+        if c.expires < now then
+            table.remove(credits, i)
+        else
+            if c.seen[key] == now then return true end
+            if c.left > 0 and not c.seen[key] then
+                c.left = c.left - 1
+                c.seen[key] = now
+                return true
+            end
+            i = i + 1
+        end
+    end
+    return false
+end
+
+-- unit token -> { prev, cur, t }: the last two health values seen.
+local healthLog = {}
+
+local function ReadHealth(unit)
+    local ok, h, m = pcall(function() return UnitHealth(unit), UnitHealthMax(unit) end)
+    if not ok or issecretvalue(h) or issecretvalue(m) then return nil end
+    return h, m
+end
+
+local function OnUnitHealth(unit)
+    local h = ReadHealth(unit)
+    if not h then return end
+    local e = healthLog[unit]
+    if not e then e = {}; healthLog[unit] = e end
+    if e.cur ~= h then
+        e.prev, e.cur, e.t = e.cur, h, GetTime()
+    end
+end
+
+-- How much of `amount` was overhealing. UNIT_COMBAT and UNIT_HEALTH come
+-- from the same server update, in either order:
+--   * UnitHealth already differs from the cache: UNIT_HEALTH is still to
+--     come, so the cached value is the health before the heal;
+--   * the cache moved THIS frame: UNIT_HEALTH came first, prev is "before";
+--   * otherwise the heal is not applied yet, and current health is "before".
+local function EstimateOverheal(unit, amount)
+    local now, max = ReadHealth(unit)
+    if not now or not max or max <= 0 then return nil end
+    local e = healthLog[unit]
+    local before
+    if e and e.cur and e.cur ~= now then
+        before = e.cur
+    elseif e and e.t == GetTime() and e.prev then
+        before = e.prev
+    else
+        before = now
+    end
+    local effective = math_min(amount, max - before)
+    if effective < 0 then effective = 0 end
+    return amount - effective
+end
+
 local function OnUnitCombat(unit, action, descriptor, amount)
     if action ~= "HEAL" or not unit then return end
+    local cfg = Cfg()
+    -- No way to tell a HoT tick from a direct heal, or whose heal it was,
+    -- except by matching it to one of the player's own direct-heal casts.
+    if not cfg.showHoTs and not TakeCredit(unit) then return end
     local crit = (descriptor == "CRITICAL")
     local text
     if not issecretvalue(amount) and type(amount) == "number" then
         if amount <= 0 then return end
-        text = "+" .. FormatAmount(amount) .. (crit and "!" or "")
+        local overheal = cfg.showOverheal and EstimateOverheal(unit, amount) or 0
+        text = "+" .. FormatAmount(amount - overheal) .. (crit and "!" or "")
+        if overheal > 0 then
+            text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
+        end
     end
     ForEachFrame(unit, false, function(f) Show(f, text, amount, crit) end)
 end
@@ -242,6 +376,11 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         pcall(OnCombatLog)
     elseif event == "UNIT_COMBAT" then
         OnUnitCombat(...)
+    elseif event == "UNIT_HEALTH" then
+        OnUnitHealth((...))
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        local _, _, spellID = ...
+        OnPlayerCast(spellID)
     elseif event == "PLAYER_LOGIN" then
         playerGUID = UnitGUID("player")
         HT:Init()
@@ -263,6 +402,8 @@ function HT:Refresh()
     local cfg = Cfg()
     eventFrame:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
     eventFrame:UnregisterEvent("UNIT_COMBAT")
+    eventFrame:UnregisterEvent("UNIT_HEALTH")
+    eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
     cleuRegistered, cleuAlive = false, false
     if not (cfg and cfg.enabled) then return end
     if CLEUInfo then
@@ -270,6 +411,8 @@ function HT:Refresh()
             and eventFrame:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED") or false
     end
     eventFrame:RegisterEvent("UNIT_COMBAT")
+    eventFrame:RegisterEvent("UNIT_HEALTH")
+    eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 end
 
 function HT:Mode()

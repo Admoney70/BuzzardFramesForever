@@ -61,6 +61,32 @@ local function Slider(key, label, desc, min, max, step)
              get = Get(key), set = Set(key) }
 end
 
+-- The LSM font list, resolved each time the menu opens, each row drawn in
+-- its own face (the same picker Pages_AuraText.lua builds).
+local function FontOptions()
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    local out = {}
+    if LSM then
+        for _, name in ipairs(LSM:List("font")) do
+            out[#out + 1] = { value = name, text = name,
+                              font = LSM:Fetch("font", name) }
+        end
+    end
+    return out
+end
+
+local OUTLINE_OPTIONS = {
+    { value = "",             text = "None" },
+    { value = "OUTLINE",      text = "Outline" },
+    { value = "THICKOUTLINE", text = "Thick Outline" },
+}
+
+local function Dropdown(key, label, options)
+    return { control = "dropdown", label = label, options = options,
+             id = key, default = Default(key), hidden = Off,
+             get = Get(key), set = Set(key) }
+end
+
 function BuzzardFramesOptions:HealTextPage()
     return {
         groups = {
@@ -79,16 +105,20 @@ function BuzzardFramesOptions:HealTextPage()
             }},
             { title = "What To Show", preset = "form", fields = {
                 Switch("onlyMine", "Only My Heals",
-                    "Show only heals you cast. Needs the combat log; if the "
-                    .. "client does not give addons the combat log, every "
-                    .. "heal on the unit shows instead."),
+                    "Show only heals you cast. Without the combat log this "
+                    .. "is only possible while HoT ticks are off."),
                 Switch("showHoTs", "Show HoT Ticks",
                     "Also show each periodic tick (Rejuvenation, Regrowth's "
-                    .. "HoT, Renew...). Off shows only direct heals. Needs "
-                    .. "the combat log."),
+                    .. "HoT, Renew...).\n\nOff: only direct heals show. "
+                    .. "Without the combat log, that means your own direct "
+                    .. "heals, matched to your casts.\n\nOn without the "
+                    .. "combat log: every heal on the unit shows, from any "
+                    .. "healer."),
                 Switch("showOverheal", "Show Overhealing",
-                    "Add the overhealed amount in grey brackets after the "
-                    .. "number. Needs the combat log."),
+                    "Show the amount that actually healed, with the "
+                    .. "overhealed part in grey brackets after it. Without "
+                    .. "the combat log the overheal is worked out from the "
+                    .. "unit's health, so it can be slightly off."),
                 Switch("showSpell", "Show Spell Name",
                     "Put the spell name in front of the number. Needs the "
                     .. "combat log."),
@@ -103,6 +133,8 @@ function BuzzardFramesOptions:HealTextPage()
                     .. "target-of-target frames."),
             }},
             { title = "Style", preset = "form", fields = {
+                Dropdown("font", "Font", FontOptions),
+                Dropdown("fontOutline", "Font Outline", OUTLINE_OPTIONS),
                 Slider("fontSize", "Font Size", nil, 8, 32, 1),
                 Slider("yOffset", "Vertical Offset",
                     "Where the number starts, relative to the frame's center.",
