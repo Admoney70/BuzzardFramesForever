@@ -670,6 +670,9 @@ function BuzzardFramesOptions:BuildRoutes(app)
         { id = "incomingCasts", title = "Incoming Casts", sectionKey = "incomingCasts",
             page = function() return self:IncomingCastsPage() end,
             children = self:IncomingCastsRoutes() },
+        -- Floating heal numbers (Pages_HealText.lua). One page, no children.
+        { id = "healText", title = "Heal Text", sectionKey = "healText",
+            page = function() return self:HealTextPage() end },
         -- Its five pages (General, Profile Management, Themes, Export,
         -- Import) are RAIL children -- no navigator of its own, so the
         -- rail lists them under the section and no strip repeats them:
