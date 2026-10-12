@@ -94,8 +94,7 @@ function BuzzardFramesOptions:HealTextPage()
                 { control = "note", wide = true,
                   text = "Floating numbers on the frames when a heal lands: "
                       .. "Regrowth's initial hit, Healing Touch, Swiftmend and "
-                      .. "so on. |cffffd100/bfheal test|r shows sample numbers; "
-                      .. "|cffffd100/bfheal|r says which data source is in use." },
+                      .. "so on. |cffffd100/bfheal test|r shows sample numbers." },
             }},
             { title = "Heal Text", preset = "form", fields = {
                 { control = "switch", label = "Show Heal Text", wide = true,
@@ -104,24 +103,19 @@ function BuzzardFramesOptions:HealTextPage()
                   get = Get("enabled"), set = Set("enabled", true) },
             }},
             { title = "What To Show", preset = "form", fields = {
-                Switch("onlyMine", "Only My Heals",
-                    "Show only heals you cast. Without the combat log this "
-                    .. "is only possible while HoT ticks are off."),
-                Switch("showHoTs", "Show HoT Ticks",
-                    "Also show each periodic tick (Rejuvenation, Regrowth's "
-                    .. "HoT, Renew...).\n\nOff: only direct heals show. "
-                    .. "Without the combat log, that means your own direct "
-                    .. "heals, matched to your casts.\n\nOn without the "
-                    .. "combat log: every heal on the unit shows, from any "
-                    .. "healer."),
+                Switch("showHoTs", "Show All Heals (HoT Ticks Too)",
+                    "Off: only your own direct heals show (Regrowth's first "
+                    .. "hit, Healing Touch, Swiftmend...), matched to your "
+                    .. "casts.\n\nOn: every heal on the unit shows, from any "
+                    .. "healer, HoT ticks included -- the game does not say "
+                    .. "whose heal it was or whether it was a tick."),
                 Switch("showOverheal", "Show Overhealing",
                     "Show the amount that actually healed, with the "
-                    .. "overhealed part in grey brackets after it. Without "
-                    .. "the combat log the overheal is worked out from the "
-                    .. "unit's health, so it can be slightly off."),
+                    .. "overhealed part in grey brackets after it. Worked out "
+                    .. "from the unit's health, so it can be slightly off."),
                 Switch("showSpell", "Show Spell Name",
-                    "Put the spell name in front of the number. Needs the "
-                    .. "combat log."),
+                    "Put the spell name in front of the number (your own "
+                    .. "direct heals only)."),
                 Switch("biggerCrits", "Bigger Crits",
                     "Show critical heals in a larger font."),
             }},
