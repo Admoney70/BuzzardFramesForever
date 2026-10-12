@@ -3,16 +3,13 @@
 -- Floating heal numbers on the raid/party frames and the oUF unit frames
 -- (player, target, focus, pet, target-of-target, focus-target).
 --
--- Two data sources, best first:
---   1. COMBAT_LOG_EVENT_UNFILTERED -- knows who cast the heal, the spell,
---      overhealing and crits, so "only my heals" and the HoT filter work.
---      The Midnight-era engine Forever runs on may refuse addons the combat
---      log; registration is tried under pcall, and the source only counts
---      as live once an event actually arrives.
---   2. UNIT_COMBAT -- the unit's own feedback event (what Blizzard's
---      portrait feedback text uses); used until (or unless) the combat log
---      is seen working. It names no caster and no spell, and a HoT tick
---      looks exactly like a direct heal, so two things are rebuilt around it:
+-- The combat log is off limits on Forever: even REGISTERING or
+-- UNREGISTERING COMBAT_LOG_EVENT_UNFILTERED is a protected action there
+-- (ADDON_ACTION_FORBIDDEN, which pcall cannot catch), so this module never
+-- names that event. The data source is UNIT_COMBAT -- the unit's own
+-- feedback event (what Blizzard's portrait feedback text uses). It names
+-- no caster and no spell, and a HoT tick looks exactly like a direct heal,
+-- so two things are rebuilt around it:
 --        * Direct heals: each of the player's own direct-heal casts
 --          (UNIT_SPELLCAST_SUCCEEDED) grants a short window in which that
 --          many heal events may show. With HoT ticks off, only heals that
@@ -40,8 +37,6 @@ local tostring      = tostring
 local math_floor    = math.floor
 local string_format = string.format
 local issecretvalue = issecretvalue or function() return false end
-local CLEUInfo      = CombatLogGetCurrentEventInfo
-    or (C_CombatLog and C_CombatLog.GetCurrentEventInfo)
 
 local HT = {}
 BF.HealText = HT
@@ -49,7 +44,6 @@ BF.HealText = HT
 BF.healTextDefaults = {
     profile = {
         enabled      = true,
-        onlyMine     = true,
         showHoTs     = false,
         showOverheal = true,
         showSpell    = false,
@@ -73,8 +67,6 @@ local OUF_FRAME_NAMES = {
 }
 
 local SLOTS = 4
-local playerGUID
-local cleuRegistered, cleuAlive = false, false
 local eventFrame = CreateFrame("Frame")
 
 local function Cfg()
@@ -164,11 +156,6 @@ local function FrameUnit(frame)
     return frame.unit or (frame.GetAttribute and frame:GetAttribute("unit"))
 end
 
-local function SafeGUIDMatch(unit, guid)
-    local ok, match = pcall(function() return UnitGUID(unit) == guid end)
-    return ok and match
-end
-
 -- Calls test(frame) for every frame heal text may appear on.
 local function VisitFrames(cfg, test)
     if cfg.raidParty then
@@ -187,62 +174,17 @@ local function VisitFrames(cfg, test)
     end
 end
 
--- Calls fn(frame) for every shown frame that matches. `byGUID` matches on
--- the unit's GUID (combat log), otherwise on the exact unit token
--- (UNIT_COMBAT fires once per token, so an exact match never doubles up).
-local function ForEachFrame(key, byGUID, fn)
+-- Calls fn(frame) for every shown frame on exactly this unit token.
+-- UNIT_COMBAT fires once per token naming the unit (party1 AND target), so
+-- an exact match shows each heal once per frame, never twice.
+local function ForEachFrame(unit, fn)
     local cfg = Cfg()
     local function test(frame)
-        if not frame or not frame:IsVisible() then return end
-        local u = FrameUnit(frame)
-        if not u then return end
-        if byGUID then
-            if SafeGUIDMatch(u, key) then fn(frame) end
-        elseif u == key then
+        if frame and frame:IsVisible() and FrameUnit(frame) == unit then
             fn(frame)
         end
     end
     VisitFrames(cfg, test)
-end
-
--- ── Sources ───────────────────────────────────────────────────
-
-local function OnCombatLog()
-    local _, sub, _, srcGUID, _, _, _, dstGUID, _, _, _,
-          _, spellName, _, amount, overheal, _, crit = CLEUInfo()
-    -- A combat log that hides who did what is no better than the fallback:
-    -- leave UNIT_COMBAT in charge.
-    if issecretvalue(sub) or issecretvalue(srcGUID) or issecretvalue(dstGUID) then return end
-    if not cleuAlive then
-        -- The combat log works: retire the fallback.
-        cleuAlive = true
-        eventFrame:UnregisterEvent("UNIT_COMBAT")
-        eventFrame:UnregisterEvent("UNIT_HEALTH")
-        eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    end
-    if sub ~= "SPELL_HEAL" and sub ~= "SPELL_PERIODIC_HEAL" then return end
-    local cfg = Cfg()
-    if sub == "SPELL_PERIODIC_HEAL" and not cfg.showHoTs then return end
-    if cfg.onlyMine and srcGUID ~= playerGUID then return end
-    if not dstGUID then return end
-
-    local text
-    if issecretvalue(amount) or issecretvalue(overheal) then
-        text = nil
-    else
-        overheal = overheal or 0
-        local eff = (amount or 0) - overheal
-        if eff <= 0 and not (cfg.showOverheal and overheal > 0) then return end
-        text = "+" .. FormatAmount(eff > 0 and eff or 0)
-        if crit then text = text .. "!" end
-        if cfg.showOverheal and overheal > 0 then
-            text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
-        end
-        if cfg.showSpell and spellName and not issecretvalue(spellName) then
-            text = spellName .. " " .. text
-        end
-    end
-    ForEachFrame(dstGUID, true, function(f) Show(f, text, amount, crit) end)
 end
 
 -- ── UNIT_COMBAT helpers: direct-heal credits and overheal estimate ──
@@ -274,9 +216,11 @@ local function SpellNameOf(spellID)
 end
 
 local function OnPlayerCast(spellID)
-    local n = DIRECT_HEALS[SpellNameOf(spellID) or ""]
+    local name = SpellNameOf(spellID)
+    local n = name and DIRECT_HEALS[name]
     if not n then return end
-    credits[#credits + 1] = { expires = GetTime() + CREDIT_WINDOW, left = n, seen = {} }
+    credits[#credits + 1] = { expires = GetTime() + CREDIT_WINDOW, left = n,
+                              seen = {}, name = name }
 end
 
 -- The same heal reaches UNIT_COMBAT once per token naming the unit
@@ -296,16 +240,16 @@ local function TakeCredit(unit)
         if c.expires < now then
             table.remove(credits, i)
         else
-            if c.seen[key] == now then return true end
+            if c.seen[key] == now then return c end
             if c.left > 0 and not c.seen[key] then
                 c.left = c.left - 1
                 c.seen[key] = now
-                return true
+                return c
             end
             i = i + 1
         end
     end
-    return false
+    return nil
 end
 
 -- unit token -> { prev, cur, t }: the last two health values seen.
@@ -355,7 +299,8 @@ local function OnUnitCombat(unit, action, descriptor, amount)
     local cfg = Cfg()
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
     -- except by matching it to one of the player's own direct-heal casts.
-    if not cfg.showHoTs and not TakeCredit(unit) then return end
+    local credit = TakeCredit(unit)
+    if not cfg.showHoTs and not credit then return end
     local crit = (descriptor == "CRITICAL")
     local text
     if not issecretvalue(amount) and type(amount) == "number" then
@@ -365,16 +310,13 @@ local function OnUnitCombat(unit, action, descriptor, amount)
         if overheal > 0 then
             text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
         end
+        if cfg.showSpell and credit then text = credit.name .. " " .. text end
     end
-    ForEachFrame(unit, false, function(f) Show(f, text, amount, crit) end)
+    ForEachFrame(unit, function(f) Show(f, text, amount, crit) end)
 end
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
-    if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        -- pcall: if this engine hands out secret GUIDs or amounts, a compare
-        -- would throw on every combat log line; fail quietly instead.
-        pcall(OnCombatLog)
-    elseif event == "UNIT_COMBAT" then
+    if event == "UNIT_COMBAT" then
         OnUnitCombat(...)
     elseif event == "UNIT_HEALTH" then
         OnUnitHealth((...))
@@ -382,7 +324,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         local _, _, spellID = ...
         OnPlayerCast(spellID)
     elseif event == "PLAYER_LOGIN" then
-        playerGUID = UnitGUID("player")
         HT:Init()
     end
 end)
@@ -400,25 +341,13 @@ end
 
 function HT:Refresh()
     local cfg = Cfg()
-    eventFrame:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
     eventFrame:UnregisterEvent("UNIT_COMBAT")
     eventFrame:UnregisterEvent("UNIT_HEALTH")
     eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    cleuRegistered, cleuAlive = false, false
     if not (cfg and cfg.enabled) then return end
-    if CLEUInfo then
-        cleuRegistered = pcall(eventFrame.RegisterEvent, eventFrame, "COMBAT_LOG_EVENT_UNFILTERED")
-            and eventFrame:IsEventRegistered("COMBAT_LOG_EVENT_UNFILTERED") or false
-    end
     eventFrame:RegisterEvent("UNIT_COMBAT")
     eventFrame:RegisterEvent("UNIT_HEALTH")
     eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
-end
-
-function HT:Mode()
-    if cleuAlive then return "combat log" end
-    if cleuRegistered then return "unit feedback (combat log registered, no events seen yet)" end
-    return "unit feedback (combat log unavailable)"
 end
 
 -- Fake heals on every shown frame, for positioning and style checks.
@@ -453,7 +382,6 @@ SlashCmdList.BUZZARDHEALTEXT = function(msg)
     else
         print("|cff11ace9Buzzard Frames|r heal text: "
             .. ((Cfg() and Cfg().enabled) and "on" or "off")
-            .. ", source: " .. HT:Mode()
             .. ".  /bfheal test shows sample numbers.")
     end
 end
