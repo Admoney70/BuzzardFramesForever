@@ -249,13 +249,19 @@ for i = 1, 40 do NAME_TOKENS[#NAME_TOKENS + 1] = "raid" .. i end
 
 local function GUIDForName(name)
     if not Plain(name) or name == "" then return nil end
+    -- The unit API takes a group member's (or the player's own) name in
+    -- place of a token, which spares comparing names at all.
+    local gok, g = pcall(UnitGUID, name)
+    if gok and Plain(g) then return g end
     local short = name:match("^([^%-]+)") or name
+    local lname, lshort = name:lower(), short:lower()
     for i = 1, #NAME_TOKENS do
         local u = NAME_TOKENS[i]
         if UnitExists(u) then
             local ok, n, realm = pcall(UnitName, u)
-            if ok and Plain(n) and (n == name or n == short
-                    or (Plain(realm) and realm ~= "" and (n .. "-" .. realm) == name)) then
+            local ln = ok and Plain(n) and n:lower()
+            if ln and (ln == lname or ln == lshort
+                    or (Plain(realm) and realm ~= "" and (ln .. "-" .. realm:lower()) == lname)) then
                 local key = UnitKey(u)
                 if key ~= u then return key end
             end
@@ -302,6 +308,11 @@ local function OnSpellSent(target, castGUID, spellID)
         -- A name we cannot place (not in the group) leaves the credit
         -- unbound rather than tied to the wrong unit.
         guid = GUIDForName(target)
+        if guid == nil and HT.debug then
+            local ok, n = pcall(UnitName, "player")
+            Debug("  no unit named", '"' .. target .. '"', "(player is",
+                  (ok and Plain(n)) and ('"' .. n .. '")') or "<secret>)")
+        end
     elseif not Plain(target) then
         guid = nil
     else
