@@ -484,6 +484,9 @@ function HT:Init()
     if not self.db then
         self.db = LibStub("AceDB-3.0"):New("BuzzardFramesHealTextDB", BF.healTextDefaults, true)
         BF.healTextDB = self.db
+        -- Output of the retired C_DamageMeter probe (secret in combat on
+        -- Forever, so of no use to heal text).
+        self.db.global.meterProbe = nil
     end
     self:Refresh()
 end
@@ -530,10 +533,6 @@ SlashCmdList.BUZZARDHEALTEXT = function(msg)
     msg = (msg or ""):lower()
     if msg == "test" then
         HT:Test()
-    elseif msg == "meter" and BF.MeterProbe then
-        BF.MeterProbe:Inventory()
-    elseif msg == "meterwatch" and BF.MeterProbe then
-        BF.MeterProbe:ToggleWatch()
     elseif msg == "debug" then
         HT.debug = not HT.debug
         print("|cff11ace9Buzzard Frames|r heal text debug " .. (HT.debug and "on" or "off"))
