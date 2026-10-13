@@ -12,7 +12,8 @@
 -- so two things are rebuilt around it:
 --        * Direct heals: each of the player's own direct-heal casts
 --          (UNIT_SPELLCAST_SUCCEEDED) grants a short window in which that
---          many heal events may show. With HoT ticks off, only heals that
+--          many heal events may show -- on the unit it was cast at
+--          (UNIT_SPELLCAST_SENT), for a single-target heal. With HoT ticks off, only heals that
 --          land inside such a window show -- your direct heals.
 --        * Overhealing: estimated from the unit's health just before the
 --          heal (cached from UNIT_HEALTH) against its max health.
@@ -27,6 +28,8 @@ local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
 local CreateFrame   = CreateFrame
 local UnitGUID      = UnitGUID
 local UnitExists    = UnitExists
+local UnitName      = UnitName
+local UnitIsFriend  = UnitIsFriend
 local UnitHealth    = UnitHealth
 local UnitHealthMax = UnitHealthMax
 local GetTime       = GetTime
@@ -202,7 +205,10 @@ local DIRECT_HEALS = {
     ["Desperate Prayer"] = 1,
 }
 local CREDIT_WINDOW = 1.0   -- seconds from cast success to the heal landing
-local credits = {}          -- { expires, left, seen = { [key] = time } }
+-- credits[i] = { expires, left, name, target = GUID|nil, used = { [GUID] = true },
+--                last = { key, time, amount } }
+local credits = {}
+local sentTargets = {}      -- castGUID -> target GUID, from UNIT_SPELLCAST_SENT
 
 local function SpellNameOf(spellID)
     if not spellID or issecretvalue(spellID) then return nil end
@@ -215,35 +221,99 @@ local function SpellNameOf(spellID)
     if name and not issecretvalue(name) then return name end
 end
 
-local function OnPlayerCast(spellID)
-    local name = SpellNameOf(spellID)
-    local n = name and DIRECT_HEALS[name]
-    if not n then return end
-    credits[#credits + 1] = { expires = GetTime() + CREDIT_WINDOW, left = n,
-                              seen = {}, name = name }
-end
-
--- The same heal reaches UNIT_COMBAT once per token naming the unit
--- (party1 AND target, say), all in one frame: a unit already counted
--- against a credit in THIS frame passes again without using it up.
+-- A GUID for a unit token, or the token itself if the GUID is unreadable.
 local function UnitKey(unit)
     local ok, guid = pcall(UnitGUID, unit)
     if ok and guid and not issecretvalue(guid) then return guid end
     return unit
 end
 
-local function TakeCredit(unit)
+local function Plain(v)
+    return v ~= nil and not issecretvalue(v)
+end
+
+-- UNIT_SPELLCAST_SENT names the target only by NAME. Find the unit that
+-- carries it among the tokens a heal can be aimed at.
+local NAME_TOKENS = { "target", "mouseover", "focus", "player", "pet" }
+for i = 1, 4 do NAME_TOKENS[#NAME_TOKENS + 1] = "party" .. i end
+for i = 1, 4 do NAME_TOKENS[#NAME_TOKENS + 1] = "partypet" .. i end
+for i = 1, 40 do NAME_TOKENS[#NAME_TOKENS + 1] = "raid" .. i end
+
+local function GUIDForName(name)
+    if not Plain(name) or name == "" then return nil end
+    local short = name:match("^([^%-]+)") or name
+    for i = 1, #NAME_TOKENS do
+        local u = NAME_TOKENS[i]
+        if UnitExists(u) then
+            local ok, n, realm = pcall(UnitName, u)
+            if ok and Plain(n) and (n == name or n == short
+                    or (Plain(realm) and realm ~= "" and (n .. "-" .. realm) == name)) then
+                local key = UnitKey(u)
+                if key ~= u then return key end
+            end
+        end
+    end
+    return nil
+end
+
+local function OnSpellSent(target, castGUID)
+    if not Plain(castGUID) then return end
+    local guid
+    if Plain(target) and target ~= "" then
+        -- A name we cannot place (secret, or not in the group) leaves the
+        -- credit unbound rather than tied to the wrong unit.
+        guid = GUIDForName(target)
+    else
+        -- No name: the client picked the target itself -- a friendly
+        -- target, else (auto self-cast) the player.
+        local ok, friendly = pcall(UnitIsFriend, "player", "target")
+        guid = UnitKey((ok and friendly == true) and "target" or "player")
+    end
+    sentTargets[castGUID] = guid
+end
+
+local function OnPlayerCast(castGUID, spellID)
+    local target = Plain(castGUID) and sentTargets[castGUID] or nil
+    if Plain(castGUID) then sentTargets[castGUID] = nil end
+    local name = SpellNameOf(spellID)
+    local n = name and DIRECT_HEALS[name]
+    if not n then return end
+    credits[#credits + 1] = {
+        expires = GetTime() + CREDIT_WINDOW, left = n, name = name,
+        -- Single-target heals are tied to the unit they were cast on; the
+        -- group heals (Chain Heal, Prayer of Healing, Holy Nova) are not.
+        target = (n == 1) and target or nil,
+        used = {},
+    }
+end
+
+-- Is this heal one of the player's direct heals? Returns the credit it was
+-- matched to, or nil.
+--
+-- The same heal reaches UNIT_COMBAT once per token naming the unit
+-- (party1 AND target, say), in one frame, with one amount: a repeat of the
+-- heal a credit just took (same unit, same frame, same amount) passes
+-- again without using anything up. A second, different heal on that unit
+-- in that frame -- another healer's -- does not.
+local function TakeCredit(unit, amount)
     local now, key = GetTime(), UnitKey(unit)
+    local plainAmount = Plain(amount) and amount or nil
     local i = 1
     while i <= #credits do
         local c = credits[i]
         if c.expires < now then
             table.remove(credits, i)
         else
-            if c.seen[key] == now then return c end
-            if c.left > 0 and not c.seen[key] then
+            local last = c.last
+            if last and last.key == key and last.time == now
+                    and plainAmount and last.amount == plainAmount then
+                return c
+            end
+            if c.left > 0 and not c.used[key]
+                    and (c.target == nil or c.target == key) then
                 c.left = c.left - 1
-                c.seen[key] = now
+                c.used[key] = true
+                c.last = { key = key, time = now, amount = plainAmount }
                 return c
             end
             i = i + 1
@@ -299,7 +369,7 @@ local function OnUnitCombat(unit, action, descriptor, amount)
     local cfg = Cfg()
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
     -- except by matching it to one of the player's own direct-heal casts.
-    local credit = TakeCredit(unit)
+    local credit = TakeCredit(unit, amount)
     if not cfg.showHoTs and not credit then return end
     local crit = (descriptor == "CRITICAL")
     local text
@@ -320,9 +390,12 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         OnUnitCombat(...)
     elseif event == "UNIT_HEALTH" then
         OnUnitHealth((...))
+    elseif event == "UNIT_SPELLCAST_SENT" then
+        local _, target, castGUID = ...
+        OnSpellSent(target, castGUID)
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-        local _, _, spellID = ...
-        OnPlayerCast(spellID)
+        local _, castGUID, spellID = ...
+        OnPlayerCast(castGUID, spellID)
     elseif event == "PLAYER_LOGIN" then
         HT:Init()
     end
@@ -344,10 +417,12 @@ function HT:Refresh()
     eventFrame:UnregisterEvent("UNIT_COMBAT")
     eventFrame:UnregisterEvent("UNIT_HEALTH")
     eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+    eventFrame:UnregisterEvent("UNIT_SPELLCAST_SENT")
     if not (cfg and cfg.enabled) then return end
     eventFrame:RegisterEvent("UNIT_COMBAT")
     eventFrame:RegisterEvent("UNIT_HEALTH")
     eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+    eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 end
 
 -- Fake heals on every shown frame, for positioning and style checks.
