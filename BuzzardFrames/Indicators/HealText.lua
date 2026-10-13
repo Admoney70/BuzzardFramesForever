@@ -37,6 +37,7 @@ local math_min      = math.min
 local pcall         = pcall
 local type          = type
 local tostring      = tostring
+local tonumber      = tonumber
 local math_floor    = math.floor
 local string_format = string.format
 local issecretvalue = issecretvalue or function() return false end
@@ -204,7 +205,14 @@ local DIRECT_HEALS = {
     ["Flash Heal"] = 1, ["Prayer of Healing"] = 5, ["Holy Nova"] = 5,
     ["Desperate Prayer"] = 1,
 }
-local CREDIT_WINDOW = 1.0   -- seconds from cast success to the heal landing
+-- A direct heal's result reaches the client with (or a hair after) the
+-- server's "cast went off" that fires UNIT_SPELLCAST_SUCCEEDED, so the
+-- window is short: a long one lets another healer's heal on the same tank
+-- take the credit. A heal that arrives a little BEFORE the success event
+-- waits in `pending` for PRE_WINDOW so the order of the two does not matter.
+local CREDIT_WINDOW = 0.5
+local PRE_WINDOW    = 0.1
+local pending = {}          -- heals not (yet) matched: { unit, key, amount, crit, time, overheal }
 -- credits[i] = { expires, left, name, target = GUID|nil, used = { [GUID] = true },
 --                last = { key, time, amount } }
 local credits = {}
@@ -272,54 +280,82 @@ local function OnSpellSent(target, castGUID)
     sentTargets[castGUID] = guid
 end
 
+-- The lowest amount the spell's tooltip says it heals ("for 93 to 107"),
+-- or nil when the tooltip has no range (Swiftmend) or is not loaded yet.
+local function MinHealFor(spellID)
+    local desc
+    if C_Spell and C_Spell.GetSpellDescription then
+        desc = C_Spell.GetSpellDescription(spellID)
+    elseif GetSpellDescription then
+        desc = GetSpellDescription(spellID)
+    end
+    if not Plain(desc) then return nil end
+    local lo = desc:gsub(",", ""):match("for (%d+) to %d+")
+    return lo and tonumber(lo) or nil
+end
+
+local function Debug(...)
+    if HT.debug then print("|cff11ace9BF heal|r", ...) end
+end
+
+local MatchPending   -- defined below TakeCredit
+
 local function OnPlayerCast(castGUID, spellID)
     local target = Plain(castGUID) and sentTargets[castGUID] or nil
     if Plain(castGUID) then sentTargets[castGUID] = nil end
     local name = SpellNameOf(spellID)
     local n = name and DIRECT_HEALS[name]
     if not n then return end
-    credits[#credits + 1] = {
-        expires = GetTime() + CREDIT_WINDOW, left = n, name = name,
+    local now = GetTime()
+    local credit = {
+        time = now, expires = now + CREDIT_WINDOW, left = n, name = name,
         -- Single-target heals are tied to the unit they were cast on; the
         -- group heals (Chain Heal, Prayer of Healing, Holy Nova) are not.
         target = (n == 1) and target or nil,
+        min = MinHealFor(spellID),
         used = {},
     }
+    credits[#credits + 1] = credit
+    Debug("cast", name, "target", tostring(credit.target), "min", tostring(credit.min))
+    MatchPending(credit)
 end
 
--- Is this heal one of the player's direct heals? Returns the credit it was
--- matched to, or nil.
---
--- The same heal reaches UNIT_COMBAT once per token naming the unit
--- (party1 AND target, say), in one frame, with one amount: a repeat of the
--- heal a credit just took (same unit, same frame, same amount) passes
--- again without using anything up. A second, different heal on that unit
--- in that frame -- another healer's -- does not.
-local function TakeCredit(unit, amount)
-    local now, key = GetTime(), UnitKey(unit)
-    local plainAmount = Plain(amount) and amount or nil
-    local i = 1
+-- Can this credit take this heal? The same heal reaches UNIT_COMBAT once
+-- per token naming the unit (party1 AND target, say), at one time, with
+-- one amount: a repeat of the heal a credit just took passes again without
+-- using anything up. Anything else must be on the cast's target, at least
+-- the spell's tooltip minimum, and inside the window.
+local function TryCredit(c, heal)
+    local last = c.last
+    if last and last.key == heal.key and last.time == heal.time
+            and heal.amount and last.amount == heal.amount then
+        return true
+    end
+    if c.left <= 0 or c.used[heal.key] then return false end
+    if c.target ~= nil and c.target ~= heal.key then return false, "other target" end
+    if heal.time > c.expires or heal.time < c.time - PRE_WINDOW then return false, "outside window" end
+    if c.min and heal.amount and heal.amount < c.min * 0.9 then return false, "below spell min" end
+    c.left = c.left - 1
+    c.used[heal.key] = true
+    c.last = { key = heal.key, time = heal.time, amount = heal.amount }
+    return true
+end
+
+local function TakeCredit(heal)
+    local now = GetTime()
+    local i, why = 1, "no cast"
     while i <= #credits do
         local c = credits[i]
-        if c.expires < now then
+        if c.expires < now - PRE_WINDOW then
             table.remove(credits, i)
         else
-            local last = c.last
-            if last and last.key == key and last.time == now
-                    and plainAmount and last.amount == plainAmount then
-                return c
-            end
-            if c.left > 0 and not c.used[key]
-                    and (c.target == nil or c.target == key) then
-                c.left = c.left - 1
-                c.used[key] = true
-                c.last = { key = key, time = now, amount = plainAmount }
-                return c
-            end
+            local ok, reason = TryCredit(c, heal)
+            if ok then return c end
+            why = reason or why
             i = i + 1
         end
     end
-    return nil
+    return nil, why
 end
 
 -- unit token -> { prev, cur, t }: the last two health values seen.
@@ -364,25 +400,65 @@ local function EstimateOverheal(unit, amount)
     return amount - effective
 end
 
-local function OnUnitCombat(unit, action, descriptor, amount)
-    if action ~= "HEAL" or not unit then return end
+local function Render(heal, credit)
     local cfg = Cfg()
-    -- No way to tell a HoT tick from a direct heal, or whose heal it was,
-    -- except by matching it to one of the player's own direct-heal casts.
-    local credit = TakeCredit(unit, amount)
-    if not cfg.showHoTs and not credit then return end
-    local crit = (descriptor == "CRITICAL")
     local text
-    if not issecretvalue(amount) and type(amount) == "number" then
-        if amount <= 0 then return end
-        local overheal = cfg.showOverheal and EstimateOverheal(unit, amount) or 0
-        text = "+" .. FormatAmount(amount - overheal) .. (crit and "!" or "")
+    if heal.amount then
+        local overheal = heal.overheal or 0
+        text = "+" .. FormatAmount(heal.amount - overheal) .. (heal.crit and "!" or "")
         if overheal > 0 then
             text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
         end
         if cfg.showSpell and credit then text = credit.name .. " " .. text end
     end
-    ForEachFrame(unit, function(f) Show(f, text, amount, crit) end)
+    ForEachFrame(heal.unit, function(f) Show(f, text, heal.raw, heal.crit) end)
+end
+
+-- A cast just went off: its result may already be waiting.
+MatchPending = function(credit)
+    local now = GetTime()
+    local i = 1
+    while i <= #pending do
+        local heal = pending[i]
+        if heal.time < now - PRE_WINDOW then
+            table.remove(pending, i)
+        elseif TryCredit(credit, heal) then
+            table.remove(pending, i)
+            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)")
+            Render(heal, credit)
+        else
+            i = i + 1
+        end
+    end
+end
+
+local function OnUnitCombat(unit, action, descriptor, amount)
+    if action ~= "HEAL" or not unit then return end
+    local cfg = Cfg()
+    local plain = Plain(amount) and type(amount) == "number"
+    if plain and amount <= 0 then return end
+    local heal = {
+        unit = unit, key = UnitKey(unit), time = GetTime(),
+        raw = amount, amount = plain and amount or nil,
+        crit = (descriptor == "CRITICAL"),
+    }
+    -- Overheal is read NOW, while the health cache still describes this heal.
+    if plain and cfg.showOverheal then heal.overheal = EstimateOverheal(unit, amount) end
+
+    -- No way to tell a HoT tick from a direct heal, or whose heal it was,
+    -- except by matching it to one of the player's own direct-heal casts.
+    local credit, why = TakeCredit(heal)
+    if credit then
+        Debug("heal", unit, tostring(heal.amount), "-> " .. credit.name,
+              string_format("dt %.2f", heal.time - credit.time))
+        Render(heal, credit)
+    elseif cfg.showHoTs then
+        Render(heal, nil)
+    else
+        Debug("heal", unit, tostring(heal.amount), "held:", why)
+        pending[#pending + 1] = heal
+        while #pending > 40 do table.remove(pending, 1) end
+    end
 end
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
@@ -454,9 +530,12 @@ SlashCmdList.BUZZARDHEALTEXT = function(msg)
     msg = (msg or ""):lower()
     if msg == "test" then
         HT:Test()
+    elseif msg == "debug" then
+        HT.debug = not HT.debug
+        print("|cff11ace9Buzzard Frames|r heal text debug " .. (HT.debug and "on" or "off"))
     else
         print("|cff11ace9Buzzard Frames|r heal text: "
             .. ((Cfg() and Cfg().enabled) and "on" or "off")
-            .. ".  /bfheal test shows sample numbers.")
+            .. ".  /bfheal test shows sample numbers, /bfheal debug explains each heal.")
     end
 end
