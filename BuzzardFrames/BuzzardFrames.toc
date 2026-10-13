@@ -129,7 +129,6 @@ Indicators\LevelText.lua
 Indicators\ReducedMaxHealthText.lua
 Indicators\StatusText_Overlay.lua
 Indicators\HealText.lua
-Indicators\MeterProbe.lua
 Indicators\RoleIcon.lua
 Indicators\RaidTargetIcon.lua
 Indicators\PingIndicator.lua
