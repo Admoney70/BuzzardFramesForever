@@ -264,22 +264,6 @@ local function GUIDForName(name)
     return nil
 end
 
-local function OnSpellSent(target, castGUID)
-    if not Plain(castGUID) then return end
-    local guid
-    if Plain(target) and target ~= "" then
-        -- A name we cannot place (secret, or not in the group) leaves the
-        -- credit unbound rather than tied to the wrong unit.
-        guid = GUIDForName(target)
-    else
-        -- No name: the client picked the target itself -- a friendly
-        -- target, else (auto self-cast) the player.
-        local ok, friendly = pcall(UnitIsFriend, "player", "target")
-        guid = UnitKey((ok and friendly == true) and "target" or "player")
-    end
-    sentTargets[castGUID] = guid
-end
-
 -- The lowest amount the spell's tooltip says it heals ("for 93 to 107"),
 -- or nil when the tooltip has no range (Swiftmend) or is not loaded yet.
 local function MinHealFor(spellID)
@@ -300,13 +284,61 @@ end
 
 local MatchPending   -- defined below TakeCredit
 
+-- The client's own choice of target when a cast names none: a friendly
+-- target, else (auto self-cast) the player.
+local function DefaultTargetKey()
+    local ok, friendly = pcall(UnitIsFriend, "player", "target")
+    return UnitKey((ok and friendly == true) and "target" or "player")
+end
+
+-- The last UNIT_SPELLCAST_SENT, kept apart from the castGUID table: on
+-- Forever the castGUID can come through secret (unusable as a key), and
+-- then this is the only link between a cast and its target.
+local lastSent
+
+local function OnSpellSent(target, castGUID, spellID)
+    local guid
+    if Plain(target) and target ~= "" then
+        -- A name we cannot place (not in the group) leaves the credit
+        -- unbound rather than tied to the wrong unit.
+        guid = GUIDForName(target)
+    elseif not Plain(target) then
+        guid = nil
+    else
+        guid = DefaultTargetKey()
+    end
+    lastSent = { guid = guid, time = GetTime(), spellID = Plain(spellID) and spellID or nil }
+    if Plain(castGUID) then sentTargets[castGUID] = guid end
+    Debug("sent", Plain(target) and ('"' .. target .. '"') or "<secret>",
+          "castGUID", Plain(castGUID) and "ok" or "<secret>", "->", tostring(guid))
+end
+
 local function OnPlayerCast(castGUID, spellID)
-    local target = Plain(castGUID) and sentTargets[castGUID] or nil
-    if Plain(castGUID) then sentTargets[castGUID] = nil end
+    local target, how
+    if Plain(castGUID) and sentTargets[castGUID] ~= nil then
+        target, how = sentTargets[castGUID], "castGUID"
+        sentTargets[castGUID] = nil
+    end
+    -- Fallback: the most recent SENT, if it is recent enough to be this
+    -- cast (cast times run to ~3.5s) and, when both IDs are readable, the
+    -- same spell.
+    if target == nil and lastSent and lastSent.guid
+            and GetTime() - lastSent.time < 10
+            and (lastSent.spellID == nil or not Plain(spellID) or lastSent.spellID == spellID) then
+        target, how = lastSent.guid, "last sent"
+    end
+    lastSent = nil
     local name = SpellNameOf(spellID)
     local n = name and DIRECT_HEALS[name]
     if not n then return end
     local now = GetTime()
+    -- Last resort for a single-target heal: the target the client would
+    -- have picked. Wrong only for mouseover/click casts on someone else,
+    -- and then the cost is one of the player's own heals not showing --
+    -- never someone else's heal showing as the player's.
+    if target == nil and n == 1 then
+        target, how = DefaultTargetKey(), "guessed"
+    end
     local credit = {
         time = now, expires = now + CREDIT_WINDOW, left = n, name = name,
         -- Single-target heals are tied to the unit they were cast on; the
@@ -316,7 +348,8 @@ local function OnPlayerCast(castGUID, spellID)
         used = {},
     }
     credits[#credits + 1] = credit
-    Debug("cast", name, "target", tostring(credit.target), "min", tostring(credit.min))
+    Debug("cast", name, "target", tostring(credit.target), "(" .. tostring(how) .. ")",
+          "min", tostring(credit.min))
     MatchPending(credit)
 end
 
@@ -467,8 +500,8 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "UNIT_HEALTH" then
         OnUnitHealth((...))
     elseif event == "UNIT_SPELLCAST_SENT" then
-        local _, target, castGUID = ...
-        OnSpellSent(target, castGUID)
+        local _, target, castGUID, spellID = ...
+        OnSpellSent(target, castGUID, spellID)
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         local _, castGUID, spellID = ...
         OnPlayerCast(castGUID, spellID)
