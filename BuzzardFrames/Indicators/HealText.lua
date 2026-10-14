@@ -428,7 +428,8 @@ end
 -- from the same server update, in either order:
 --   * UnitHealth already differs from the cache: UNIT_HEALTH is still to
 --     come, so the cached value is the health before the heal;
---   * the cache moved THIS frame: UNIT_HEALTH came first, prev is "before";
+--   * the cache rose by no more than the heal just now (UNIT_HEALTH came
+--     first, possibly a frame or two earlier): prev is "before";
 --   * otherwise the heal is not applied yet, and current health is "before".
 local function EstimateOverheal(unit, amount)
     local now, max = ReadHealth(unit)
@@ -437,7 +438,8 @@ local function EstimateOverheal(unit, amount)
     local before
     if e and e.cur and e.cur ~= now then
         before = e.cur
-    elseif e and e.t == GetTime() and e.prev then
+    elseif e and e.prev and e.t and GetTime() - e.t <= 0.25
+            and e.cur - e.prev > 0 and e.cur - e.prev <= amount then
         before = e.prev
     else
         before = now
@@ -473,7 +475,7 @@ MatchPending = function(credit)
             table.remove(pending, i)
         elseif TryCredit(credit, heal) then
             table.remove(pending, i)
-            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)")
+            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)", heal.ohNote or "")
             Render(heal, credit)
         else
             i = i + 1
@@ -492,10 +494,9 @@ local function OnUnitCombat(unit, action, descriptor, amount)
         crit = (descriptor == "CRITICAL"),
     }
     -- Overheal is read NOW, while the health cache still describes this heal.
-    local ohNote
     if plain and cfg.showOverheal then
         heal.overheal = EstimateOverheal(unit, amount)
-        ohNote = heal.overheal and ("over " .. heal.overheal) or "over ? (health unreadable)"
+        heal.ohNote = heal.overheal and ("over " .. heal.overheal) or "over ? (health unreadable)"
     end
 
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
@@ -503,7 +504,7 @@ local function OnUnitCombat(unit, action, descriptor, amount)
     local credit, why = TakeCredit(heal)
     if credit then
         Debug("heal", unit, tostring(heal.amount), "-> " .. credit.name,
-              string_format("dt %.2f", heal.time - credit.time), ohNote or "")
+              string_format("dt %.2f", heal.time - credit.time), heal.ohNote or "")
         Render(heal, credit)
     elseif cfg.showHoTs then
         Render(heal, nil)
