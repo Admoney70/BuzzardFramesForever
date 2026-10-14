@@ -81,6 +81,11 @@ local OUTLINE_OPTIONS = {
     { value = "THICKOUTLINE", text = "Thick Outline" },
 }
 
+local OVERHEAL_FORMATS = {
+    { value = "total",     text = "Whole Heal: +103 (93)" },
+    { value = "effective", text = "Healing Done: +10 (93)" },
+}
+
 local function Dropdown(key, label, options)
     return { control = "dropdown", label = label, options = options,
              id = key, default = Default(key), hidden = Off,
@@ -110,9 +115,10 @@ function BuzzardFramesOptions:HealTextPage()
                     .. "healer, HoT ticks included -- the game does not say "
                     .. "whose heal it was or whether it was a tick."),
                 Switch("showOverheal", "Show Overhealing",
-                    "Show the amount that actually healed, with the "
-                    .. "overhealed part in grey brackets after it. Worked out "
-                    .. "from the unit's health, so it can be slightly off."),
+                    "Show the overhealed part in grey brackets after the "
+                    .. "number. Worked out from the unit's health, so it can "
+                    .. "be slightly off."),
+                Dropdown("overhealFormat", "Overheal Number", OVERHEAL_FORMATS),
                 Switch("showSpell", "Show Spell Name",
                     "Put the spell name in front of the number (your own "
                     .. "direct heals only)."),

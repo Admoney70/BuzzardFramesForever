@@ -50,6 +50,9 @@ BF.healTextDefaults = {
         enabled      = true,
         showHoTs     = false,
         showOverheal = true,
+        -- "total": the whole heal, overheal in brackets (+103 (93));
+        -- "effective": only what landed, overheal in brackets (+10 (93)).
+        overhealFormat = "total",
         showSpell    = false,
         biggerCrits  = true,
         raidParty    = true,
@@ -449,7 +452,9 @@ local function Render(heal, credit)
     local text
     if heal.amount then
         local overheal = heal.overheal or 0
-        text = "+" .. FormatAmount(heal.amount - overheal) .. (heal.crit and "!" or "")
+        local shown = heal.amount
+        if cfg.overhealFormat == "effective" then shown = shown - overheal end
+        text = "+" .. FormatAmount(shown) .. (heal.crit and "!" or "")
         if overheal > 0 then
             text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
         end
@@ -487,14 +492,18 @@ local function OnUnitCombat(unit, action, descriptor, amount)
         crit = (descriptor == "CRITICAL"),
     }
     -- Overheal is read NOW, while the health cache still describes this heal.
-    if plain and cfg.showOverheal then heal.overheal = EstimateOverheal(unit, amount) end
+    local ohNote
+    if plain and cfg.showOverheal then
+        heal.overheal = EstimateOverheal(unit, amount)
+        ohNote = heal.overheal and ("over " .. heal.overheal) or "over ? (health unreadable)"
+    end
 
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
     -- except by matching it to one of the player's own direct-heal casts.
     local credit, why = TakeCredit(heal)
     if credit then
         Debug("heal", unit, tostring(heal.amount), "-> " .. credit.name,
-              string_format("dt %.2f", heal.time - credit.time))
+              string_format("dt %.2f", heal.time - credit.time), ohNote or "")
         Render(heal, credit)
     elseif cfg.showHoTs then
         Render(heal, nil)
@@ -557,9 +566,11 @@ function HT:Test()
         n = n + 1
         local crit = (n % 3 == 0)
         local amt = 400 + (n * 137) % 1600
-        local text = "+" .. FormatAmount(amt) .. (crit and "!" or "")
-        if cfg.showOverheal and n % 2 == 0 then
-            text = text .. " |cff999999(" .. FormatAmount(math_floor(amt / 3)) .. ")|r"
+        local over = (cfg.showOverheal and n % 2 == 0) and math_floor(amt / 3) or 0
+        local shown = (cfg.overhealFormat == "effective") and (amt - over) or amt
+        local text = "+" .. FormatAmount(shown) .. (crit and "!" or "")
+        if over > 0 then
+            text = text .. " |cff999999(" .. FormatAmount(over) .. ")|r"
         end
         if cfg.showSpell then text = "Regrowth " .. text end
         Show(f, text, nil, crit)
