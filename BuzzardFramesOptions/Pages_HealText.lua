@@ -81,11 +81,6 @@ local OUTLINE_OPTIONS = {
     { value = "THICKOUTLINE", text = "Thick Outline" },
 }
 
-local OVERHEAL_FORMATS = {
-    { value = "total",     text = "Whole Heal: +103 (93)" },
-    { value = "effective", text = "Healing Done: +10 (93)" },
-}
-
 local function Dropdown(key, label, options)
     return { control = "dropdown", label = label, options = options,
              id = key, default = Default(key), hidden = Off,
@@ -99,7 +94,9 @@ function BuzzardFramesOptions:HealTextPage()
                 { control = "note", wide = true,
                   text = "Floating numbers on the frames when a heal lands: "
                       .. "Regrowth's initial hit, Healing Touch, Swiftmend and "
-                      .. "so on. |cffffd100/bfheal test|r shows sample numbers." },
+                      .. "so on. Overhealing cannot be shown: the game hides "
+                      .. "health from addons in combat. "
+                      .. "|cffffd100/bfheal test|r shows sample numbers." },
             }},
             { title = "Heal Text", preset = "form", fields = {
                 { control = "switch", label = "Show Heal Text", wide = true,
@@ -114,11 +111,6 @@ function BuzzardFramesOptions:HealTextPage()
                     .. "casts.\n\nOn: every heal on the unit shows, from any "
                     .. "healer, HoT ticks included -- the game does not say "
                     .. "whose heal it was or whether it was a tick."),
-                Switch("showOverheal", "Show Overhealing",
-                    "Show the overhealed part in grey brackets after the "
-                    .. "number. Worked out from the unit's health, so it can "
-                    .. "be slightly off."),
-                Dropdown("overhealFormat", "Overheal Number", OVERHEAL_FORMATS),
                 Switch("showSpell", "Show Spell Name",
                     "Put the spell name in front of the number (your own "
                     .. "direct heals only)."),

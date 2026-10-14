@@ -9,14 +9,13 @@
 -- names that event. The data source is UNIT_COMBAT -- the unit's own
 -- feedback event (what Blizzard's portrait feedback text uses). It names
 -- no caster and no spell, and a HoT tick looks exactly like a direct heal,
--- so two things are rebuilt around it:
---        * Direct heals: each of the player's own direct-heal casts
+-- so the player's direct heals are rebuilt around it: each of the player's own direct-heal casts
 --          (UNIT_SPELLCAST_SUCCEEDED) grants a short window in which that
 --          many heal events may show -- on the unit it was cast at
 --          (UNIT_SPELLCAST_SENT), for a single-target heal. With HoT ticks off, only heals that
 --          land inside such a window show -- your direct heals.
---        * Overhealing: estimated from the unit's health just before the
---          heal (cached from UNIT_HEALTH) against its max health.
+--      Overhealing is not shown: unit health is secret in combat, so
+--      there is nothing to measure a heal against.
 --      Any secret value on this engine is only ever handed to the
 --      FontString, never computed with.
 --
@@ -30,10 +29,7 @@ local UnitGUID      = UnitGUID
 local UnitExists    = UnitExists
 local UnitName      = UnitName
 local UnitIsFriend  = UnitIsFriend
-local UnitHealth    = UnitHealth
-local UnitHealthMax = UnitHealthMax
 local GetTime       = GetTime
-local math_min      = math.min
 local pcall         = pcall
 local type          = type
 local tostring      = tostring
@@ -49,10 +45,6 @@ BF.healTextDefaults = {
     profile = {
         enabled      = true,
         showHoTs     = false,
-        showOverheal = true,
-        -- "total": the whole heal, overheal in brackets (+103 (93));
-        -- "effective": only what landed, overheal in brackets (+10 (93)).
-        overhealFormat = "total",
         showSpell    = false,
         biggerCrits  = true,
         raidParty    = true,
@@ -194,7 +186,7 @@ local function ForEachFrame(unit, fn)
     VisitFrames(cfg, test)
 end
 
--- ── UNIT_COMBAT helpers: direct-heal credits and overheal estimate ──
+-- ── UNIT_COMBAT helpers: direct-heal credits ──
 
 -- The player's direct heals, by name, with how many targets one cast can
 -- land on. Names rather than IDs: Forever's spell IDs (and ranks) are not
@@ -215,7 +207,7 @@ local DIRECT_HEALS = {
 -- waits in `pending` for PRE_WINDOW so the order of the two does not matter.
 local CREDIT_WINDOW = 0.5
 local PRE_WINDOW    = 0.1
-local pending = {}          -- heals not (yet) matched: { unit, key, amount, crit, time, overheal }
+local pending = {}          -- heals not (yet) matched: { unit, key, amount, crit, time }
 -- credits[i] = { expires, left, name, target = GUID|nil, used = { [GUID] = true },
 --                last = { key, time, amount } }
 local credits = {}
@@ -405,61 +397,11 @@ local function TakeCredit(heal)
     return nil, why
 end
 
--- unit token -> { prev, cur, t }: the last two health values seen.
-local healthLog = {}
-
-local function ReadHealth(unit)
-    local ok, h, m = pcall(function() return UnitHealth(unit), UnitHealthMax(unit) end)
-    if not ok or issecretvalue(h) or issecretvalue(m) then return nil end
-    return h, m
-end
-
-local function OnUnitHealth(unit)
-    local h = ReadHealth(unit)
-    if not h then return end
-    local e = healthLog[unit]
-    if not e then e = {}; healthLog[unit] = e end
-    if e.cur ~= h then
-        e.prev, e.cur, e.t = e.cur, h, GetTime()
-    end
-end
-
--- How much of `amount` was overhealing. UNIT_COMBAT and UNIT_HEALTH come
--- from the same server update, in either order:
---   * UnitHealth already differs from the cache: UNIT_HEALTH is still to
---     come, so the cached value is the health before the heal;
---   * the cache rose by no more than the heal just now (UNIT_HEALTH came
---     first, possibly a frame or two earlier): prev is "before";
---   * otherwise the heal is not applied yet, and current health is "before".
-local function EstimateOverheal(unit, amount)
-    local now, max = ReadHealth(unit)
-    if not now or not max or max <= 0 then return nil end
-    local e = healthLog[unit]
-    local before
-    if e and e.cur and e.cur ~= now then
-        before = e.cur
-    elseif e and e.prev and e.t and GetTime() - e.t <= 0.25
-            and e.cur - e.prev > 0 and e.cur - e.prev <= amount then
-        before = e.prev
-    else
-        before = now
-    end
-    local effective = math_min(amount, max - before)
-    if effective < 0 then effective = 0 end
-    return amount - effective
-end
-
 local function Render(heal, credit)
     local cfg = Cfg()
     local text
     if heal.amount then
-        local overheal = heal.overheal or 0
-        local shown = heal.amount
-        if cfg.overhealFormat == "effective" then shown = shown - overheal end
-        text = "+" .. FormatAmount(shown) .. (heal.crit and "!" or "")
-        if overheal > 0 then
-            text = text .. " |cff999999(" .. FormatAmount(overheal) .. ")|r"
-        end
+        text = "+" .. FormatAmount(heal.amount) .. (heal.crit and "!" or "")
         if cfg.showSpell and credit then text = credit.name .. " " .. text end
     end
     ForEachFrame(heal.unit, function(f) Show(f, text, heal.raw, heal.crit) end)
@@ -475,7 +417,7 @@ MatchPending = function(credit)
             table.remove(pending, i)
         elseif TryCredit(credit, heal) then
             table.remove(pending, i)
-            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)", heal.ohNote or "")
+            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)")
             Render(heal, credit)
         else
             i = i + 1
@@ -493,18 +435,13 @@ local function OnUnitCombat(unit, action, descriptor, amount)
         raw = amount, amount = plain and amount or nil,
         crit = (descriptor == "CRITICAL"),
     }
-    -- Overheal is read NOW, while the health cache still describes this heal.
-    if plain and cfg.showOverheal then
-        heal.overheal = EstimateOverheal(unit, amount)
-        heal.ohNote = heal.overheal and ("over " .. heal.overheal) or "over ? (health unreadable)"
-    end
 
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
     -- except by matching it to one of the player's own direct-heal casts.
     local credit, why = TakeCredit(heal)
     if credit then
         Debug("heal", unit, tostring(heal.amount), "-> " .. credit.name,
-              string_format("dt %.2f", heal.time - credit.time), heal.ohNote or "")
+              string_format("dt %.2f", heal.time - credit.time))
         Render(heal, credit)
     elseif cfg.showHoTs then
         Render(heal, nil)
@@ -518,8 +455,6 @@ end
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "UNIT_COMBAT" then
         OnUnitCombat(...)
-    elseif event == "UNIT_HEALTH" then
-        OnUnitHealth((...))
     elseif event == "UNIT_SPELLCAST_SENT" then
         local _, target, castGUID, spellID = ...
         OnSpellSent(target, castGUID, spellID)
@@ -548,12 +483,10 @@ end
 function HT:Refresh()
     local cfg = Cfg()
     eventFrame:UnregisterEvent("UNIT_COMBAT")
-    eventFrame:UnregisterEvent("UNIT_HEALTH")
     eventFrame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
     eventFrame:UnregisterEvent("UNIT_SPELLCAST_SENT")
     if not (cfg and cfg.enabled) then return end
     eventFrame:RegisterEvent("UNIT_COMBAT")
-    eventFrame:RegisterEvent("UNIT_HEALTH")
     eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
     eventFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 end
@@ -567,12 +500,7 @@ function HT:Test()
         n = n + 1
         local crit = (n % 3 == 0)
         local amt = 400 + (n * 137) % 1600
-        local over = (cfg.showOverheal and n % 2 == 0) and math_floor(amt / 3) or 0
-        local shown = (cfg.overhealFormat == "effective") and (amt - over) or amt
-        local text = "+" .. FormatAmount(shown) .. (crit and "!" or "")
-        if over > 0 then
-            text = text .. " |cff999999(" .. FormatAmount(over) .. ")|r"
-        end
+        local text = "+" .. FormatAmount(amt) .. (crit and "!" or "")
         if cfg.showSpell then text = "Regrowth " .. text end
         Show(f, text, nil, crit)
     end
