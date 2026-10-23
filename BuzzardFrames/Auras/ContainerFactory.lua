@@ -6568,6 +6568,7 @@ function BF:ReapplyCombatConditionalAuraFilters()
         if frame and frame._bf_auraContainers then
             if BF.ApplyDebuffLTDExcludes then BF.ApplyDebuffLTDExcludes(frame) end
             if BF.ApplyRaidBuffGroupState then BF.ApplyRaidBuffGroupState(frame) end
+            if BF.ApplyBuffsCombatExcludes then BF.ApplyBuffsCombatExcludes(frame) end
         end
     end
 end

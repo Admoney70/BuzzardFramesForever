@@ -3327,6 +3327,21 @@ local function _mergePresetCandidates(def, ex)
     return cand
 end
 
+-- Forever: the Buffs display's exclude set with the long raid buffs
+-- (BF.COMBAT_HIDDEN_BUFF_IDS) added while in combat -- what RAID_IN_COMBAT
+-- did on retail. Returns `ex` itself out of combat; in combat a scratch
+-- copy, so the shared cfg.excludeSpellIDs is never written to. The engine
+-- gets the table by reference only for the duration of the setter call.
+local _combatBuffEx = {}
+local function BuffsPresetExcludes(ex)
+    local hide = BF.COMBAT_HIDDEN_BUFF_IDS
+    if not (BF._inCombat and hide) then return ex end
+    table.wipe(_combatBuffEx)
+    if ex then for sid in pairs(ex) do _combatBuffEx[sid] = true end end
+    for sid in pairs(hide) do _combatBuffEx[sid] = true end
+    return _combatBuffEx
+end
+
 -- ── v95 (2026-08-25): DETERMINISTIC CANDIDATE SIGNATURE ───────────────────
 -- A byte-stable string for a candidateFilters table, so ApplyPresetGroups can
 -- ask "is what I am about to push different from what this GROUP last landed?"
@@ -3761,7 +3776,13 @@ local function ApplyPresetGroups(parent, key, c, groupTypeKey, ac,
                         pkey, def, ac, dedupPresent, containerMaxDur, ex)
                 else
                     baseFilter = def.filter
-                    baseCand   = _mergePresetCandidates(def, ex)
+                    baseCand   = _mergePresetCandidates(def,
+                        isBuffs and BuffsPresetExcludes(ex) or ex)
+                    -- What the combat-edge re-apply needs to rebuild this
+                    -- group's candidates without a Layout pass.
+                    if isBuffs then
+                        cc._bf_buffsPresetStash = { gk = gk, def = def, ex = ex }
+                    end
                 end
                 -- v95: this group's candidate SIGNATURE -- the whole question
                 -- put to the engine below (filter token string + candidate
@@ -5140,6 +5161,29 @@ local function GetOwnRaidBuffIDs()
     return specId and BF.SPEC_RAID_BUFF_IDS
         and BF.SPEC_RAID_BUFF_IDS[specId] or nil
 end
+
+-- Combat edge: swap the long raid buffs in or out of the Buffs preset
+-- group's exclude set (see BuffsPresetExcludes). Same guard and stamp as
+-- ApplyPresetGroups, so the next Layout does not push it again; a denied
+-- setter leaves the stamp alone and the next edge or Layout retries.
+local function ApplyBuffsCombatExcludes(parent)
+    local cc = parent._bf_auraContainers and parent._bf_auraContainers.buffs
+    local st = cc and cc._bf_buffsPresetStash
+    if not st then return end
+    local gk = st.gk
+    if not (cc._bf_groupSpecs and cc._bf_groupSpecs[gk]) then return end
+    if cc._bf_dormantGroups and cc._bf_dormantGroups[gk] then return end
+    local cand = _mergePresetCandidates(st.def, BuffsPresetExcludes(st.ex))
+    local sig = tostring(st.def.filter) .. "|" .. CandidateSig(cand)
+    local stamps = cc._bf_groupCandSig
+    if stamps and stamps[gk] == sig then return end
+    if pcall(cc.SetAuraGroupCandidateFilters, cc, gk, cand or {}) then
+        if not stamps then stamps = {}; cc._bf_groupCandSig = stamps end
+        stamps[gk] = sig
+    end
+    pcall(cc.UpdateAllAuras, cc)
+end
+BF.ApplyBuffsCombatExcludes = ApplyBuffsCombatExcludes
 
 local function ApplyRaidBuffGroupState(parent)
     local c = parent._bf_auraContainers and parent._bf_auraContainers.buffs
