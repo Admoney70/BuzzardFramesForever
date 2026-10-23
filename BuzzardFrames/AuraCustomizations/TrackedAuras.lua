@@ -15,6 +15,39 @@ BF.DESERTER_SPELL_IDS = {
 }
 -- (DEBUFF_BLACKLIST removed: its only entry, Challenger's Burden, no
 -- longer exists in Midnight, and the table had no remaining consumers.)
+-- Forever: long raid buffs the Buffs display hides IN COMBAT. Retail did
+-- this with the RAID_IN_COMBAT filter token, a per-spell server flag the
+-- Classic-era spell data does not carry, so the set is listed here instead.
+-- Every rank has its own spell ID; later-expansion ranks are listed too
+-- (an ID the client does not have simply never matches).
+BF.COMBAT_HIDDEN_BUFF_IDS = {}
+for _, ids in ipairs({
+    { 1126, 5232, 6756, 5234, 8907, 9884, 9885, 26990, 48469 },  -- Mark of the Wild
+    { 21849, 21850, 26991, 48470 },  -- Gift of the Wild
+    { 1243, 1244, 1245, 2791, 10937, 10938, 25389, 48161 },  -- Power Word: Fortitude
+    { 21562, 21564, 25392, 48162 },  -- Prayer of Fortitude
+    { 14752, 14818, 14819, 27841, 25312, 48073 },  -- Divine Spirit
+    { 27681, 32999, 48074 },  -- Prayer of Spirit
+    { 976, 10957, 10958, 25433, 48169 },  -- Shadow Protection
+    { 27683, 39374, 48170 },  -- Prayer of Shadow Protection
+    { 1459, 1460, 1461, 10156, 10157, 27126, 42995 },  -- Arcane Intellect
+    { 23028, 27127, 43002 },  -- Arcane Brilliance
+    { 19740, 19834, 19835, 19836, 19837, 19838, 25291, 27140, 48931, 48932 },  -- Blessing of Might
+    { 19742, 19850, 19852, 19853, 19854, 25290, 27142, 48935, 48936 },  -- Blessing of Wisdom
+    { 20217 },  -- Blessing of Kings
+    { 1038 },  -- Blessing of Salvation
+    { 19977, 19978, 19979, 27144 },  -- Blessing of Light
+    { 20911, 20912, 20913, 20914, 27168 },  -- Blessing of Sanctuary
+    { 25782, 25916, 27141, 48933, 48934 },  -- Greater Blessing of Might
+    { 25894, 25918, 27143, 48937, 48938 },  -- Greater Blessing of Wisdom
+    { 25898 },  -- Greater Blessing of Kings
+    { 25895 },  -- Greater Blessing of Salvation
+    { 25890, 27145 },  -- Greater Blessing of Light
+    { 25899, 27169 },  -- Greater Blessing of Sanctuary
+}) do
+    for i = 1, #ids do BF.COMBAT_HIDDEN_BUFF_IDS[ids[i]] = true end
+end
+
 -- Raid buff spell IDs per class, used for the "missing buff" indicator.
 -- Keyed by UnitClassBase() return value (uppercase English class name).
 -- Each entry is a single spell ID (number).
