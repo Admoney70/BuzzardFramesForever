@@ -410,6 +410,8 @@ function BF:OnChatCommand(input)
     -- sentinel resolution it inspected are gone from
     -- AuraCustomizations/AuraCustomizations.lua, so the command had nothing
     -- left to report. "/bf debugauras" below still dumps raw aura secrecy.
+    elseif input == "buffcombat" then
+        self:BuffCombatDiag()
     elseif input == "debugauras" then
         -- Dump all debuffs on the player and every group member,
         -- showing spellId, name, and whether the spellId is secret.
