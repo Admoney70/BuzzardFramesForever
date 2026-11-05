@@ -1872,19 +1872,27 @@ local function _mergePresetCandidates(def, ex)
     return cand
 end
 
--- Forever: the Buffs display's exclude set with the long raid buffs
--- (BF.COMBAT_HIDDEN_BUFF_IDS) added while in combat -- what RAID_IN_COMBAT
--- did on retail. Returns `ex` itself out of combat; in combat a scratch
--- copy, so the shared cfg.excludeSpellIDs is never written to. The engine
--- gets the table by reference only for the duration of the setter call.
+-- Forever: what RAID_IN_COMBAT did on retail -- keep the long raid buffs
+-- (Mark of the Wild, Fortitude, Blessings...) off the Buffs display in
+-- combat. Two layers, because the spell-ID exclude alone was observed not
+-- to take in combat on Forever:
+--   * maxDuration: the engine drops every aura longer than the bound (and
+--     untimed ones); HoTs, shields and short cooldown buffs stay;
+--   * BF.COMBAT_HIDDEN_BUFF_IDS added to the exclude set.
+-- Out of combat the plain def + exclude candidates are returned unchanged.
+-- In combat the exclude set is a scratch copy, so the shared
+-- cfg.excludeSpellIDs is never written to.
+BF.COMBAT_HIDE_BUFFS_LONGER_THAN = 240   -- seconds
 local _combatBuffEx = {}
-local function BuffsPresetExcludes(ex)
+local function BuffsPresetCandidates(def, ex)
+    if not BF._inCombat then return _mergePresetCandidates(def, ex) end
     local hide = BF.COMBAT_HIDDEN_BUFF_IDS
-    if not (BF._inCombat and hide) then return ex end
     table.wipe(_combatBuffEx)
     if ex then for sid in pairs(ex) do _combatBuffEx[sid] = true end end
-    for sid in pairs(hide) do _combatBuffEx[sid] = true end
-    return _combatBuffEx
+    if hide then for sid in pairs(hide) do _combatBuffEx[sid] = true end end
+    local cand = _mergePresetCandidates(def, _combatBuffEx)
+    cand.maxDuration = BF.COMBAT_HIDE_BUFFS_LONGER_THAN
+    return cand
 end
 
 -- ── v95 (2026-08-25): DETERMINISTIC CANDIDATE SIGNATURE ───────────────────
@@ -2321,8 +2329,8 @@ local function ApplyPresetGroups(parent, key, c, groupTypeKey, ac,
                         pkey, def, ac, dedupPresent, containerMaxDur, ex)
                 else
                     baseFilter = def.filter
-                    baseCand   = _mergePresetCandidates(def,
-                        isBuffs and BuffsPresetExcludes(ex) or ex)
+                    baseCand   = isBuffs and BuffsPresetCandidates(def, ex)
+                        or _mergePresetCandidates(def, ex)
                     -- What the combat-edge re-apply needs to rebuild this
                     -- group's candidates without a Layout pass.
                     if isBuffs then
@@ -3680,7 +3688,7 @@ local function GetOwnRaidBuffIDs()
 end
 
 -- Combat edge: swap the long raid buffs in or out of the Buffs preset
--- group's exclude set (see BuffsPresetExcludes). Same guard and stamp as
+-- group's exclude set (see BuffsPresetCandidates). Same guard and stamp as
 -- ApplyPresetGroups, so the next Layout does not push it again; a denied
 -- setter leaves the stamp alone and the next edge or Layout retries.
 local function ApplyBuffsCombatExcludes(parent)
@@ -3690,15 +3698,57 @@ local function ApplyBuffsCombatExcludes(parent)
     local gk = st.gk
     if not (cc._bf_groupSpecs and cc._bf_groupSpecs[gk]) then return end
     if cc._bf_dormantGroups and cc._bf_dormantGroups[gk] then return end
-    local cand = _mergePresetCandidates(st.def, BuffsPresetExcludes(st.ex))
+    local cand = BuffsPresetCandidates(st.def, st.ex)
     local sig = tostring(st.def.filter) .. "|" .. CandidateSig(cand)
     local stamps = cc._bf_groupCandSig
-    if stamps and stamps[gk] == sig then return end
-    if pcall(cc.SetAuraGroupCandidateFilters, cc, gk, cand or {}) then
+    if stamps and stamps[gk] == sig then
+        cc._bf_combatHideResult = "already applied"
+        return
+    end
+    local ok, err = pcall(cc.SetAuraGroupCandidateFilters, cc, gk, cand or {})
+    if ok then
         if not stamps then stamps = {}; cc._bf_groupCandSig = stamps end
         stamps[gk] = sig
     end
+    cc._bf_combatHideResult = (BF._inCombat and "combat" or "out of combat")
+        .. (ok and ": applied" or (": REFUSED " .. tostring(err)))
     pcall(cc.UpdateAllAuras, cc)
+end
+
+-- /bf buffcombat: what the in-combat hide did on each group frame, and the
+-- player's own buffs with whether the hide list knows them.
+function BF:BuffCombatDiag()
+    local P = function(...) print("|cffd3ff7dBF buffcombat|r", ...) end
+    P("in combat:", tostring(BF._inCombat), " hide longer than:",
+      tostring(BF.COMBAT_HIDE_BUFFS_LONGER_THAN) .. "s")
+    local n = 0
+    for _, frame in next, self.registeredFrames or {} do
+        local cc = frame._bf_auraContainers and frame._bf_auraContainers.buffs
+        if cc and frame:IsVisible() then
+            n = n + 1
+            if n <= 5 then
+                local st = cc._bf_buffsPresetStash
+                P(tostring(frame.unit),
+                  "group", st and st.gk or "<none>",
+                  "dormant", tostring(st and cc._bf_dormantGroups
+                      and cc._bf_dormantGroups[st.gk] or false),
+                  "last:", tostring(cc._bf_combatHideResult))
+            end
+        end
+    end
+    local get = C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
+    if not get then return end
+    local hide = BF.COMBAT_HIDDEN_BUFF_IDS or {}
+    for i = 1, 40 do
+        local ok, a = pcall(get, "player", i, "HELPFUL")
+        if not ok or not a then break end
+        local sid, dur = a.spellId, a.duration
+        local plainSid = not issecretvalue(sid)
+        P(i, issecretvalue(a.name) and "<secret>" or tostring(a.name),
+          "id", plainSid and tostring(sid) or "<secret>",
+          "dur", issecretvalue(dur) and "<secret>" or tostring(dur),
+          plainSid and (hide[sid] and "(in hide list)" or "(not in list)") or "")
+    end
 end
 BF.ApplyBuffsCombatExcludes = ApplyBuffsCombatExcludes
 
