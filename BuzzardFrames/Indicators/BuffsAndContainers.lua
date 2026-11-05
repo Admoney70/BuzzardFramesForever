@@ -1877,12 +1877,13 @@ end
 -- combat. Two layers, because the spell-ID exclude alone was observed not
 -- to take in combat on Forever:
 --   * maxDuration: the engine drops every aura longer than the bound (and
---     untimed ones); HoTs, shields and short cooldown buffs stay;
+--     untimed ones); HoTs, shields, Thorns and other buffs of 10 minutes
+--     or less stay (Thorns, Earth Shield and Fear Ward run 10 minutes);
 --   * BF.COMBAT_HIDDEN_BUFF_IDS added to the exclude set.
 -- Out of combat the plain def + exclude candidates are returned unchanged.
 -- In combat the exclude set is a scratch copy, so the shared
 -- cfg.excludeSpellIDs is never written to.
-BF.COMBAT_HIDE_BUFFS_LONGER_THAN = 240   -- seconds
+BF.COMBAT_HIDE_BUFFS_LONGER_THAN = 660   -- seconds: above the 10-minute buffs
 local _combatBuffEx = {}
 local function BuffsPresetCandidates(def, ex)
     if not BF._inCombat then return _mergePresetCandidates(def, ex) end
