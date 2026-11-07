@@ -975,11 +975,49 @@ local function PetsCard()
                   end
               end },
 
+            { control = "switch", label = "Attach to Party",
+              id = "petAttachToParty",
+              default = d and d.petAttachToParty,
+              desc = "Place the pet frames right after the last party "
+                  .. "member, so a group of fewer than 5 leaves no gap. "
+                  .. "They follow the party's direction (below a column, "
+                  .. "beside a row).\n\n|cffaaaaaaThe game does not allow "
+                  .. "moving them in combat: if someone joins, leaves or "
+                  .. "summons a pet mid-fight, the pets move when combat "
+                  .. "ends. X/Y Position is not used while this is on.|r",
+              hidden = function() return not IsParty() end,
+              disabled = function()
+                  if InCombatLockdown() then return true end
+                  local flat = GetFlat()
+                  return not (flat and flat.showPetFrames)
+              end,
+              get = function()
+                  local flat = GetFlat()
+                  return flat and flat.petAttachToParty
+              end,
+              set = function(_, ctx, val)
+                  if InCombatLockdown() then return end
+                  local bf = BF()
+                  local flat = GetFlat()
+                  if not (bf and flat) then return end
+                  flat.petAttachToParty = val
+                  bf:InvalidateRaidProfileCache()
+                  if bf:ActiveMatchesModifying() then
+                      bf:RefreshPetHeaders()
+                  end
+                  if ctx and ctx.app then ctx.app:RefreshPage() end
+              end },
+
             -- Position and size as stacked PAIRS, the way the main block's
             -- are: two halves of one setting, set together. The X/Y binds
             -- keep PositionBind's soft bounds and the pet setters' own
             -- side effects (the header moves as the number changes).
-            { control = "pair", id = "petFramePosition", disabled = "combat",
+            { control = "pair", id = "petFramePosition",
+              disabled = function()
+                  if InCombatLockdown() then return true end
+                  local flat = GetFlat()
+                  return IsParty() and flat and flat.petAttachToParty and true or false
+              end,
               newRow = true,
               captions = { x = "X Position", y = "Y Position" },
               buttons = {
