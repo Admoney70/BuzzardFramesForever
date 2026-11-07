@@ -362,6 +362,7 @@ function BF:CreatePartyProfile()
         -- Pet frames
         showPetFrames    = false,
         petShowSolo      = false,
+        petAttachToParty = false,  -- pin pets right after the last party member
         petFrameWidth    = 100,
         petFrameHeight   = 50,
         petFrameSpacing  = 0,

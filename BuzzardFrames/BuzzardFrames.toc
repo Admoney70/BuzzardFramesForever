@@ -110,6 +110,7 @@ Statuses\DispelCooldown.lua
 Statuses\Offline.lua
 Statuses\Level.lua
 BFLayout.lua
+PetAttach.lua
 Auras\Auras.lua
 Auras\AuraConfig.lua
 Auras\AuraTooltip.lua
