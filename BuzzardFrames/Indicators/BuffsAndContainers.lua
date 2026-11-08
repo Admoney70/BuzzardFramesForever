@@ -4433,6 +4433,43 @@ end
 -- runs from BF:EnsureFrameAuraContainers the moment the frame is assigned a
 -- unit (see Auras/ContainerFactory.lua), which routes back into :Layout
 -- below — a superset of this function.
+-- Pet frames: the Buff Scale setting (flat.petBuffScale, a percent; 60 by
+-- default) shrinks the buff icons on pet frames only. Applied as SetScale
+-- on the frame's buff containers (the Buffs row and every custom buff
+-- container), so icon size, spacing and wrap all shrink together without a
+-- second set of geometry. Pet-ness is fixed per frame: a header's children
+-- never move to another header.
+local function PetBuffScaleFor(parent)
+    local header = parent._bf_parentHeader
+    if header == nil then header = parent:GetParent() end
+    if not (header and header.isPetFrame) then return nil end
+    local lp = BF.rpDB and BF.rpDB.profile and BF.rpDB.profile.layouts
+    local flat = header.petFlatID and lp and lp.flatLayouts
+        and lp.flatLayouts[header.petFlatID]
+    local pct = flat and flat.petBuffScale or 60
+    return math.max(0.1, pct / 100)
+end
+
+local function ApplyPetBuffScale(parent)
+    local scale = PetBuffScaleFor(parent)
+    if not scale then return end
+    local t = parent._bf_auraContainers
+    if not t then return end
+    for key, c in pairs(t) do
+        if (key == "buffs" or key:sub(1, 3) == "bfc") and c.SetScale
+           and c._bf_petBuffScale ~= scale then
+            if pcall(c.SetScale, c, scale) then c._bf_petBuffScale = scale end
+        end
+    end
+end
+
+-- Re-apply on every frame (the options slider calls this).
+function BF:ApplyPetBuffScaleAll()
+    for _, frame in next, self.registeredFrames or {} do
+        ApplyPetBuffScale(frame)
+    end
+end
+
 function BuffsAndContainers:Create(parent)
     if BF:ShouldDeferFrameAuraContainers(parent) then return end
     -- v88b: same flag as :Layout — this is the other entry that builds and
@@ -4443,6 +4480,7 @@ function BuffsAndContainers:Create(parent)
     InvalidateSingleBuffHostSizes()
     EnsureBuffContainers(parent)
     ApplyBuffFilters(parent)
+    ApplyPetBuffScale(parent)
 end
 
 -- v67: BuffsAndContainers:UpdateFrameSettings removed (12.1-only). Tooltip
@@ -4570,6 +4608,7 @@ function BuffsAndContainers:Layout(parent)
             end
         end
         ApplyBuffFilters(parent)
+        ApplyPetBuffScale(parent)
     end
     -- Fall through when the dummy icon pools exist (preview frames always;
     -- real frames while test/setup mode renders dummies): the dummy
