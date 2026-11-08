@@ -364,6 +364,7 @@ function BF:CreatePartyProfile()
         showPetFrames    = false,
         petShowSolo      = false,
         petAttachToParty = false,  -- pin pets right after the last party member
+        petBuffScale     = 60,     -- percent: buff icon size on pet frames
         petFrameWidth    = 100,
         petFrameHeight   = 50,
         petFrameSpacing  = 0,

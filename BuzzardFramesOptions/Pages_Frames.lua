@@ -1047,6 +1047,25 @@ local function PetsCard()
               },
               onChange = PetHeadersEffect, refresh = "write" },
 
+            { control = "slider", label = "Buff Scale",
+              id = "petBuffScale", newRow = true,
+              default = (d and d.petBuffScale) or 60,
+              desc = "Size of the buff icons on pet frames, as a percent of "
+                  .. "the buff size on the player frames.",
+              min = 20, max = 150, step = 5, disabled = "combat",
+              get = function()
+                  local flat = GetFlat()
+                  return flat and (flat.petBuffScale or 60)
+              end,
+              set = function(_, _, val)
+                  if InCombatLockdown() then return end
+                  local bf = BF()
+                  local flat = GetFlat()
+                  if not (bf and flat) then return end
+                  flat.petBuffScale = val
+                  if bf.ApplyPetBuffScaleAll then bf:ApplyPetBuffScaleAll() end
+              end },
+
             -- Starts a line, so the two pairs above have one to themselves.
             { control = "stepper", label = "Frame Spacing",
               bind = "petFrameSpacing", newRow = true,
