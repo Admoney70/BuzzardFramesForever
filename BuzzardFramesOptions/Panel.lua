@@ -909,9 +909,16 @@ end
 function BuzzardFramesOptions:Open()
     local Panel = LibStub and LibStub("BuzzardPanel-1.0", true)
     if not Panel then
-        print("|cff11ace9Buzzard Frames:|r the embedded BuzzardPanel library "
-            .. "did not load. Re-vendor it with "
-            .. "Tools\\vendor_buzzardpanel.py and check the .toc.")
+        -- Developer note (never shown to players): the vendored library at
+        -- Libs\BuzzardPanel did not register. Libs\BuzzardPanel\BuzzardPanel.lua
+        -- is the file that registers it and loads last from
+        -- BuzzardPanel.xml, so this means that file never ran -- an
+        -- incomplete install, or a missing/stale vendored copy (re-vendor
+        -- with Tools/vendor_buzzardpanel.py and check the .toc line).
+        -- The player only ever sees a plain reinstall request.
+        print("|cff11ace9Buzzard Frames:|r the options panel couldn't be "
+            .. "opened because Buzzard Frames didn't install completely. "
+            .. "Please reinstall Buzzard Frames.")
         return
     end
 

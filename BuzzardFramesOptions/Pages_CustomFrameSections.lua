@@ -370,7 +370,7 @@ end
 -- ── The scope object ───────────────────────────────────────────
 --
 -- One per section definition -- they differ only in which section table
--- they materialise, which override flag they read and what they stamp as
+-- they materialize, which override flag they read and what they stamp as
 -- the current section -- and they all share the one panel-wide selection.
 local function CFGScope(def)
     local s = { def = def, tracker = def.tracker }
@@ -427,7 +427,7 @@ local function CFGScope(def)
         return true
     end
 
-    -- Materialise the section table and wire its fallback, so an
+    -- Materialize the section table and wire its fallback, so an
     -- un-customized key still inherits from the global.
     --
     -- rawget, NOT flat[section]: WireFlatDefaults hangs a profile TEMPLATE
@@ -442,10 +442,10 @@ local function CFGScope(def)
         local t = rawget(flat, section)
         if type(t) ~= "table" then
             t = {}
-            -- Cast bars: a freshly materialised custom frame group castBar
+            -- Cast bars: a freshly materialized custom frame group castBar
             -- section always seeds OFF (owner rule 2026-08-13). There is no
             -- Cast Bars page here, but the rule belongs with the
-            -- materialisation rather than with the page that used to reach
+            -- materialization rather than with the page that used to reach
             -- it, or restoring the page would silently restore the bug.
             if section == "castBar" then t.enabled = false end
             flat[section] = t
@@ -461,17 +461,17 @@ local function CFGScope(def)
 
     -- The READ path, which must not write.
     --
-    -- Section() materialises, and a read that materialises is a page that
+    -- Section() materializes, and a read that materializes is a page that
     -- persists `flat.auraText = {}` into SavedVariables merely by being
     -- BUILT -- which the Aura Text page is, at build time, by IsGlobalMode,
     -- and which the search index does for every route on the first
-    -- keystroke. The Ace proxy materialised on read too, so this is not a
+    -- keystroke. The Ace proxy materialized on read too, so this is not a
     -- regression, but it contradicts the rule the override toggle exists to
     -- state: nothing is written into the group's flat while the override is
     -- off.
     --
     -- So: the group's own table when it has one; otherwise, with the
-    -- override ON, materialise (the page is live and about to be written
+    -- override ON, materialize (the page is live and about to be written
     -- to); with it OFF, hand back the GLOBAL -- which is what the group
     -- actually renders from in that state, so the page shows the truth
     -- rather than an empty table.
@@ -485,7 +485,7 @@ local function CFGScope(def)
     -- the group's copy, OFF ones from the active Layout. The split pages
     -- read through that view and write through WriteSectionKey /
     -- SectionKeyTable (the proxy overrides above), never through the view.
-    -- The materialise-on-read for a live page is kept, so the group's copy
+    -- The materialize-on-read for a live page is kept, so the group's copy
     -- exists before the first write lands.
     --
     -- A section without a flag (sorting, read cross-section by the Text
@@ -692,7 +692,7 @@ local function CFGHeaderRows(scope, def)
                 if not (g and g.flat) then return end
                 local bf = RealBF()
                 if bf and bf.SetCFGSectionOverride then
-                    -- The engine flips the flag, materialises the group's
+                    -- The engine flips the flag, materializes the group's
                     -- copy on the way ON and -- for a split section --
                     -- seeds every subtab that is on from what the group
                     -- was rendering with, so the flip changes nothing on

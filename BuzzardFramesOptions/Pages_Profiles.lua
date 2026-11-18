@@ -2,11 +2,11 @@
 -- BuzzardFramesOptions: Pages_Profiles.lua
 -- The Profiles section, in BuzzardPanel.
 --
--- The panel equivalent of BuzzardFrames' Options/Options_Profiles.lua
--- (BF:BuildProfilesOptions) and Options/Options_Themes.lua
--- (BF:BuildThemesOptions): the same settings, the same storage and the
--- same side effects, with the AceConfig childGroups="tab" section
--- replaced by five BuzzardPanel pages -- one per subtab, each a route of
+-- Ported from BuzzardFrames' former AceConfig pages
+-- Options/Options_Profiles.lua (BF:BuildProfilesOptions) and
+-- Options/Options_Themes.lua (BF:BuildThemesOptions), which have since
+-- been removed -- this is now the only Profiles UI. The AceConfig
+-- childGroups="tab" section became five BuzzardPanel pages -- one per subtab, each a route of
 -- its own under `profiles`, drawn as a strip by the `tabs` navigator that
 -- node declares. The Ace tabs map one to one, in the Ace `order` the
 -- strip read them in: tabGeneral (1) -> general, tabManage (1.5) ->
@@ -21,11 +21,12 @@
 --     :SetProfile, which is what fires the module's OnProfileChanged;
 --   * Profile Management renames and clones by reaching into the module's
 --     SavedVariables table (AceDB has no rename API) and deletes through
---     db:DeleteProfile -- the Ace page's own handlers, ported whole;
+--     db:DeleteProfile -- ported from the Ace page's handlers, since
+--     extended for the Character-specific setting (Core_ProfileLifecycle.lua);
 --   * Export stores its name and its include set in
 --     BuzzardFrames.db.global (exportProfileName / exportIncludeModules),
---     resolved through ProfilesUI.ResolveExportInclude so the two panels
---     can never disagree about what "included" means;
+--     resolved through ProfilesUI.ResolveExportInclude, the one
+--     definition of what "included" means;
 --   * Import writes nothing until the Import button: the pasted string
 --     and the decoded intermediate are session state in
 --     ProfilesUI.importState, exactly as they were file-locals of the Ace
@@ -33,8 +34,6 @@
 --   * Themes calls the engine published on BuzzardFrames
 --     (BF.THEMES, BF:ApplyThemeAsNewProfiles / ApplyThemeToCurrentProfiles
 --     through the BUZZARDFRAMES_APPLY_THEME popup, BF:BuildThemeSnapshot).
--- Both panels go through those same doors, which is what keeps them in
--- step while both exist.
 --
 -- The pipeline the tabs drive -- the legacy decoders, the import state,
 -- the decode report, the import committer, the copy window, the theme
@@ -104,8 +103,8 @@ end
 -- module_AuraCustomizations, module_CustomFrameGroups, module_UnitFrames
 -- and module_IncomingCasts selects, in that order (Ace order 11-15). The
 -- module DB's own OnProfileChanged callback, registered in Core_DB, fires
--- the shared BF:OnProfileChanged refresh pipeline, so the setter only has
--- to call SetProfile and let the page re-read.
+-- that module's handler (BF:On<Module>ProfileChanged, Core_ProfileLifecycle
+-- .lua), so the setter only has to call SetProfile and let the page re-read.
 --
 -- The Ace widget also carried `validate` returning "Profile cannot be
 -- changed in combat"; the panel has no validate, and the same rule is
@@ -134,34 +133,107 @@ local function ModuleProfileField(key, label, desc)
     }
 end
 
+-- Profile names as plain dropdown options -- the Default <Module> Profile
+-- dropdown, where the active-profile tint would mean nothing.
+local function PlainProfileOptions(key)
+    local db = ModuleDB(key)
+    if not db then return {} end
+    local out = {}
+    for _, name in ipairs(db:GetProfiles()) do
+        out[#out + 1] = { value = name, text = name }
+    end
+    return out
+end
+
+local function IsCharacterSpecific(key)
+    local db = ModuleDB(key)
+    return (db and db.global.characterSpecific) and true or false
+end
+
+-- The "Character-specific" switch beside each module's profile dropdown.
+-- Storage and the on/off side effects live in BF:SetModuleCharacterSpecific
+-- (Core_ProfileLifecycle.lua); the setting is account-wide, in the module
+-- DB's own global section.
+local function CharacterSpecificField(key, label)
+    return {
+        control = "switch", label = "Character-specific",
+        desc = "Off: every character uses the same " .. label .. " profile. "
+            .. "On: each character chooses its own " .. label .. " profile, "
+            .. "and new characters start on the default profile.",
+        id = "charSpecific_" .. key,
+        get = function() return IsCharacterSpecific(key) end,
+        set = function(_, ctx, val)
+            local bf = BF()
+            local db = ModuleDB(key)
+            if not (bf and db) then return end
+            bf:SetModuleCharacterSpecific(db, val)
+            ctx.app:RefreshPage()
+        end,
+    }
+end
+
+-- The "Default <Module> Profile" dropdown, shown only while the module is
+-- character-specific: the profile a character with no entry yet starts on
+-- (applied at login by BF:RestoreGlobalProfile).
+local function DefaultProfileField(key, label)
+    return {
+        control = "dropdown", label = "Default " .. label .. " Profile",
+        desc = "The default profile to be applied for new characters.",
+        width = 260,
+        id = "defaultProfile_" .. key,
+        hidden = function() return not IsCharacterSpecific(key) end,
+        options = function() return PlainProfileOptions(key) end,
+        get = function()
+            local db = ModuleDB(key)
+            if not db then return nil end
+            local def = db.global.defaultProfile
+            local profiles = db.sv and db.sv.profiles
+            if type(def) == "string" and profiles and profiles[def] then
+                return def
+            end
+            -- Unset or invalid: what BF:RestoreGlobalProfile then does is
+            -- leave a new character on AceDB's fallback, "Default".
+            return "Default"
+        end,
+        set = function(_, ctx, val)
+            local db = ModuleDB(key)
+            if not db then return end
+            db.global.defaultProfile = val
+            ctx.app:RefreshPage()
+        end,
+    }
+end
+
+-- One module's row: profile, Character-specific, Default <Module> Profile.
+local function AddModuleRow(fields, key, label)
+    fields[#fields + 1] = ModuleProfileField(key, label,
+        "The profile that " .. label .. " uses. Switching takes effect immediately.")
+    fields[#fields + 1] = CharacterSpecificField(key, label)
+    fields[#fields + 1] = DefaultProfileField(key, label)
+    fields[#fields + 1] = { control = "linebreak" }
+end
+
 -- ── Tab: General ───────────────────────────────────────────────
 
 local function GeneralPage()
+    local fields = {}
+    AddModuleRow(fields, "RaidPartyFrames",    "Raid/Party Frames")
+    AddModuleRow(fields, "AuraCustomizations", "Aura Customizations")
+    AddModuleRow(fields, "CustomFrameGroups",  "Custom Frame Groups")
+    AddModuleRow(fields, "UnitFrames",         "Unit Frames")
+    AddModuleRow(fields, "IncomingCasts",      "Incoming Casts")
     return {
         groups = {
             { preset = "bare", fields = {
                 { control = "note", wide = true,
-                  text = "BuzzardFrames Profiles are global, not "
-                      .. "character-specific. Profiles are now modular, "
-                      .. "changing the profile for one module does not "
-                      .. "affect the other modules.\nUse the Profile "
-                      .. "Management tab to rename, clone, or delete "
-                      .. "profiles." },
+                  text = "Go to the Profile Management in the left "
+                      .. "navigation to rename, clone or delete profiles." },
             }},
 
-            -- The Ace moduleHeader, as the card it always was.
-            { title = "Module Profiles", preset = "form", fields = {
-                ModuleProfileField("RaidPartyFrames", "Raid/Party Frames",
-                    "The profile that Raid/Party Frames uses. Switching takes effect immediately."),
-                ModuleProfileField("AuraCustomizations", "Aura Customizations",
-                    "The profile that Aura Customizations uses. Switching takes effect immediately."),
-                ModuleProfileField("CustomFrameGroups", "Custom Frame Groups",
-                    "The profile that Custom Frame Groups uses. Switching takes effect immediately."),
-                ModuleProfileField("UnitFrames", "Unit Frames",
-                    "The profile that Unit Frames uses. Switching takes effect immediately."),
-                ModuleProfileField("IncomingCasts", "Incoming Casts",
-                    "The profile that Incoming Casts uses. Switching takes effect immediately."),
-            }},
+            -- The Ace moduleHeader, as the card it always was. One module
+            -- per row: profile, Character-specific, and the Default
+            -- <Module> Profile dropdown while the switch is on.
+            { title = "Module Profiles", preset = "form", fields = fields },
         },
     }
 end
@@ -212,6 +284,9 @@ end
 -- switch if it was active, drop the old.
 local function MgmtRenameTo(val, ctx)
     if not val or val:match("^%s*$") then return end
+    -- "Default" is AceDB's fallback for every character with no entry; it
+    -- is never renamed (nor deleted -- see MgmtDeleteBlock).
+    if mgmtProfile == "Default" then return end
     local bf = BF()
     local ui = UI()
     local db = MgmtDB()
@@ -235,6 +310,16 @@ local function MgmtRenameTo(val, ctx)
             if profName == mgmtProfile then
                 sv.profileKeys[charKey] = val
             end
+        end
+    end
+    -- The module's saved account-wide profile and its default for new
+    -- characters are names too (Core_ProfileLifecycle.lua).
+    if sv.global then
+        if sv.global.activeProfile == mgmtProfile then
+            sv.global.activeProfile = val
+        end
+        if sv.global.defaultProfile == mgmtProfile then
+            sv.global.defaultProfile = val
         end
     end
     if wasActive then
@@ -273,11 +358,100 @@ local function MgmtClone(ctx)
     RebuildMgmt(ctx)
 end
 
+-- Why the selected profile cannot be deleted, or nil when it can.
+-- Protected: "Default", this character's active profile, the module's
+-- saved account-wide profile (global modules) and its default for new
+-- characters (character-specific modules).
+--
+-- A profile that OTHER characters are on is deliberately NOT protected:
+-- AceDB keeps an entry for every character that ever logged in, including
+-- deleted or transferred ones, so blocking on them could block a delete
+-- forever. AceDB's DeleteProfile clears those entries, and at their next
+-- login BF:RestoreGlobalProfile puts those characters on MgmtLandingProfile
+-- -- the Delete confirm names them (MgmtOtherUsers).
+local function MgmtDeleteBlock()
+    local db = MgmtDB()
+    if not (db and mgmtProfile) then return nil end
+    if mgmtProfile == "Default" then
+        return "The Default profile cannot be renamed or deleted."
+    end
+    if MgmtIsActive() then
+        return "The currently active profile cannot be deleted. "
+            .. "Switch to a different profile first."
+    end
+    local g = db.global
+    if g.characterSpecific then
+        if g.defaultProfile == mgmtProfile then
+            return "This profile is the default for new characters and "
+                .. "cannot be deleted. Choose a different default on the "
+                .. "General tab first."
+        end
+    elseif g.activeProfile == mgmtProfile then
+        return "This profile is used by every character and cannot be "
+            .. "deleted. Switch to a different profile first."
+    end
+    return nil
+end
+
+-- The other characters whose profileKeys entry names the selected
+-- profile, sorted for a stable confirm message.
+local function MgmtOtherUsers()
+    local db = MgmtDB()
+    local sv = MgmtSV()
+    local out = {}
+    if not (db and sv and sv.profileKeys and mgmtProfile) then return out end
+    local own = db.keys and db.keys.char
+    for charKey, prof in pairs(sv.profileKeys) do
+        if prof == mgmtProfile and charKey ~= own then
+            out[#out + 1] = charKey
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- The profile a character with no entry lands on at its next login --
+-- the same choice BF:RestoreGlobalProfile makes (Core_ProfileLifecycle.lua):
+-- the default for new characters when character-specific, else the saved
+-- account-wide profile; "Default" when that name is unset or invalid.
+local function MgmtLandingProfile()
+    local db = MgmtDB()
+    if not db then return "Default" end
+    local g = db.global
+    local name
+    if g.characterSpecific then name = g.defaultProfile else name = g.activeProfile end
+    local profiles = db.sv and db.sv.profiles
+    if type(name) == "string" and profiles and profiles[name] then
+        return name
+    end
+    return "Default"
+end
+
+local function MgmtDeleteConfirmText()
+    local ui = UI()
+    local text = "Permanently delete " .. ui.MODULE_LABELS[mgmtModule]
+        .. " profile \"" .. mgmtProfile .. "\"? This cannot be undone."
+    local others = MgmtOtherUsers()
+    if #others > 0 then
+        text = text .. "\n\nThese characters are using it and will start on \""
+            .. MgmtLandingProfile() .. "\" the next time they log in: "
+            .. table.concat(others, ", ") .. "."
+    end
+    return text
+end
+
 local function MgmtDelete(ctx)
     local ui = UI()
     local db = MgmtDB()
     if not (ui and db and mgmtProfile) then return end
+    if MgmtDeleteBlock() then return end
     db:DeleteProfile(mgmtProfile, true)
+    -- The default for new characters is only protected while the module is
+    -- character-specific (the dropdown is hidden otherwise). Clear it when
+    -- its profile goes, so it is never left naming a missing profile.
+    if db.global.defaultProfile == mgmtProfile then
+        db.global.defaultProfile = nil
+    end
     print("|cffd3ff7dBuzzardFrames:|r Deleted " .. ui.MODULE_LABELS[mgmtModule]
         .. " profile \"" .. mgmtProfile .. "\".")
     mgmtProfile = nil
@@ -348,6 +522,7 @@ local function ManagePage()
                   -- box on the page whose neighbors are both buttons.
                   submit = "Rename",
                   width = 260,
+                  disabled = function() return mgmtProfile == "Default" end,
                   get = function() return mgmtRename end,
                   set = function(_, ctx, val) MgmtRenameTo(val, ctx) end },
 
@@ -357,30 +532,20 @@ local function ManagePage()
 
                 { control = "button", label = "Delete", danger = true,
                   desc = "Permanently delete this profile.",
-                  -- Can't delete the currently active profile or Default.
+                  -- Can't delete a profile in use anywhere.
                   disabled = function()
-                      return MgmtIsActive() or mgmtProfile == "Default"
+                      return MgmtDeleteBlock() ~= nil
                   end,
                   onClick = function(_, ctx)
-                      ctx.app:Confirm("Permanently delete "
-                          .. ui.MODULE_LABELS[mgmtModule] .. " profile \""
-                          .. mgmtProfile .. "\"? This cannot be undone.",
+                      ctx.app:Confirm(MgmtDeleteConfirmText(),
                           function() MgmtDelete(ctx) end)
                   end },
 
                 -- The Ace deleteNote: why the button is grayed, shown
                 -- only when it IS grayed.
                 { control = "note", wide = true,
-                  hidden = function()
-                      return not MgmtIsActive() and mgmtProfile ~= "Default"
-                  end,
-                  text = function()
-                      if mgmtProfile == "Default" then
-                          return "The Default profile cannot be deleted."
-                      end
-                      return "The currently active profile cannot be deleted. "
-                          .. "Switch to a different profile first."
-                  end },
+                  hidden = function() return MgmtDeleteBlock() == nil end,
+                  text = function() return MgmtDeleteBlock() or "" end },
             },
         }
     end
@@ -422,9 +587,9 @@ local function ThemesPage()
                   disabled = function()
                       return InCombatLockdown() or not theme.data
                   end,
-                  -- BUZZARDFRAMES_APPLY_THEME lives in Options_Themes.lua
-                  -- beside the two apply flows its buttons call, so it is
-                  -- shown verbatim rather than re-declared here.
+                  -- BUZZARDFRAMES_APPLY_THEME lives in Themes.lua beside
+                  -- the two apply flows its buttons call, so it is shown
+                  -- verbatim rather than re-declared here.
                   onClick = function()
                       StaticPopup_Show("BUZZARDFRAMES_APPLY_THEME", theme.name, nil, key)
                   end },
@@ -468,7 +633,7 @@ end
 -- One of the five include switches -- the Ace includeRaidPartyFrames,
 -- includeAuraCustomizations, includeCustomFrameGroups, includeUnitFrames
 -- and includeIncomingCasts toggles (Ace order 20-24). v93:
--- the setter materialises EVERY key, not just this one, so the stored
+-- the setter materializes EVERY key, not just this one, so the stored
 -- table is never half-populated for a direct reader.
 local function ExportIncludeField(key, label, desc)
     return {

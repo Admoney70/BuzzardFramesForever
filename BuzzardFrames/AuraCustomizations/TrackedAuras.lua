@@ -74,6 +74,50 @@ BF.EVOKER_BUFF_BY_CLASS = {
     ["WARRIOR"]     = 381758,
 }
 
+-- Missing Raid Buff: every buff the indicator can remind about, one entry
+-- per buff, grouped by class in the order the options page lists them and the
+-- icons fill their slots. Only the player's own class's entries are ever
+-- tracked; the rest are there for other characters sharing the profile.
+--   key        storage key in icons.missingRaidBuffs (shared with Forever
+--              where the buff exists on both, so a setting carries over)
+--   name       options label (literal: C_Spell.GetSpellName follows the
+--              player's own spell overrides)
+--   spell      the single-target spell, for the options icon
+--   ids        what the tracker looks for: a number, or the Evoker variant set
+--   personal   tracked on the player only, and only while grouped
+--   knownSpell tracked only while IsPlayerSpell(knownSpell) (a talent)
+BF.MISSING_RAID_BUFFS = {
+    { class = "DRUID",   key = "DRUID_MOTW",       name = "Mark of the Wild",
+      spell = 1126,   ids = 1126 },
+    { class = "DRUID",   key = "DRUID_SYMBIOTIC",  name = "Symbiotic Relationship",
+      spell = 474750, ids = 474754, personal = true, knownSpell = 474750 },
+    { class = "EVOKER",  key = "EVOKER_BRONZE",    name = "Blessing of the Bronze",
+      spell = 364342, ids = BF.CLASS_RAID_BUFF.EVOKER },
+    { class = "MAGE",    key = "MAGE_INTELLECT",   name = "Arcane Intellect",
+      spell = 1459,   ids = 1459 },
+    { class = "PRIEST",  key = "PRIEST_FORTITUDE", name = "Power Word: Fortitude",
+      spell = 21562,  ids = 21562 },
+    { class = "SHAMAN",  key = "SHAMAN_SKYFURY",   name = "Skyfury",
+      spell = 462854, ids = 462854 },
+    { class = "WARRIOR", key = "WARRIOR_SHOUT",    name = "Battle Shout",
+      spell = 6673,   ids = 6673 },
+}
+
+-- [FOREVER] begin
+-- WoW Forever: class raid buffs as rank sets, and the out-of-combat debuff
+-- filter sets that exist there (Forever/Forever_SpellData.lua, plan 12.4/13).
+if BF.isForever and BF.Forever then
+    local F = BF.Forever
+    BF.CLASS_RAID_BUFF              = F.CLASS_RAID_BUFF
+    BF.MISSING_RAID_BUFFS           = F.MISSING_RAID_BUFFS
+    BF.SATED_SPELL_IDS              = F.SATED_SPELL_IDS
+    BF.DESERTER_SPELL_IDS           = F.DESERTER_SPELL_IDS
+    BF.SKYRIDING_SPELL_IDS          = F.SKYRIDING_SPELL_IDS
+    BF.ARCANE_EMPOWERMENT_SPELL_IDS = F.ARCANE_EMPOWERMENT_SPELL_IDS
+    BF.TIME_TRIAL_SPELL_IDS         = F.TIME_TRIAL_SPELL_IDS
+end
+-- [FOREVER] end
+
 -- Per-spec raid buff spell IDs to show out of combat when the Raid Buffs setting is on.
 -- Only list spells that are actually cast by that spec.
 BF.SPEC_RAID_BUFF_IDS = {

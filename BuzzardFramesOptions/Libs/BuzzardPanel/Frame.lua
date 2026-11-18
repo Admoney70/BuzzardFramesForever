@@ -1226,10 +1226,13 @@ local function BuildTitlebar(app)
     local x = ns.FS(close, "OVERLAY", "GameFontNormalLarge")
     x:SetPoint("CENTER")
     x:SetText("\195\151")     -- multiplication sign, reads as a clean X
-    -- Scaled off whatever the font object's size is rather than hardcoded,
-    -- so it stays in proportion if the panel's fonts are ever restyled.
-    local face, size, flags = x:GetFont()
-    if face then x:SetFont(face, size * 1.92, flags) end
+    -- Scaled off the FONT OBJECT's size, not the string's: on a fresh login
+    -- the string's GetFont can come back empty while the panel face loads,
+    -- and an X sized off that stayed small for the session (owner report
+    -- 2026-11-06). Pinned through SetFixedFontSize so a later face change
+    -- keeps it, and still in proportion if the fonts are ever restyled.
+    local _, baseSize, baseFlags = GameFontNormalLarge:GetFont()
+    ns.SetFixedFontSize(x, (baseSize or 16) * 1.92, baseFlags)
     local m = skin.textMuted
     x:SetTextColor(m[1], m[2], m[3])
     close:SetScript("OnEnter", function()

@@ -40,6 +40,7 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The fan-out, resolved at the moment it is used. `BuzzardFramesOptions:GS()`
 -- builds it on first call and memoises it; calling it from inside a getter
@@ -432,11 +433,23 @@ function PAGES.names()
                       .. "Names when enabled.",
                   hidden = function() return TVal("classColorNames") end }),
         }},
-        { title = "Capitalize Names", preset = "form", fields = {
-            Sw("capitalizeNames", "Capitalize Names",
-                "textNames", NamesRefresh, nil,
-                { desc = "Convert unit names to uppercase." }),
-        }},
+        -- Modify Names (2026-11-17, owner): same card as Text -> Names.
+        -- Built step by step: see the same card in Pages_Text.lua.
+        { title = "Modify Names", preset = "form", fields = (function()
+            local f = {
+                Sw("capitalizeNames", "Capitalize Names",
+                    "textNames", NamesRefresh, nil,
+                    { desc = "Convert unit names to uppercase." }),
+            }
+            if ForeverUI() then f[#f + 1] = Sw("showLastName", "Show Last Name", "textNames", NamesRefresh, PreviewName, { desc = ForeverUI().SHOW_LAST_NAME_DESC }) end -- [FOREVER] before Abbreviate, same row, Forever only
+            f[#f + 1] = Sw("abbreviateNames", "Abbreviate Names",
+                "textNames", NamesRefresh, PreviewName,
+                { desc = "Shorten names longer than Max Name Length." })
+            f[#f + 1] = Sl("maxNameChars", "Max Name Length", 3, 20,
+                "textNames", NamesRefresh, PreviewName,
+                { hidden = function() return not TVal("abbreviateNames") end })
+            return f
+        end)() },
     }
 end
 

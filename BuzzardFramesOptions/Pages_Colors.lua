@@ -39,6 +39,8 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- Nothing at file scope reads the addon: this page is built long after
 -- load, and asked for again on every render.
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHidden(f) if ForeverUI() then f.hidden = true end return f end -- [FOREVER]
 
 -- ── The three profile tables ───────────────────────────────────
 --
@@ -396,14 +398,14 @@ function BuzzardFramesOptions:ColorsPage()
                 PowerColor("rageColor",       "Rage",         "RAGE"),
                 PowerColor("focusColor",      "Focus",        "FOCUS"),
                 PowerColor("energyColor",     "Energy",       "ENERGY"),
-                PowerColor("runicPowerColor", "Runic Power",  "RUNIC_POWER"),
-                PowerColor("insanityColor",   "Insanity",     "INSANITY"),
-                PowerColor("maelstromColor",  "Maelstrom",    "MAELSTROM"),
-                PowerColor("lunarPowerColor", "Astral Power", "LUNAR_POWER"),
-                PowerColor("holyPowerColor",  "Holy Power",   "HOLY_POWER"),
-                PowerColor("furyColor",       "Fury",         "FURY"),
-                PowerColor("painColor",       "Pain",         "PAIN"),
-                PowerColor("essenceColor",    "Essence",      "ESSENCE"),
+                ForeverHidden(PowerColor("runicPowerColor", "Runic Power",  "RUNIC_POWER")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("insanityColor",   "Insanity",     "INSANITY")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("maelstromColor",  "Maelstrom",    "MAELSTROM")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("lunarPowerColor", "Astral Power", "LUNAR_POWER")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("holyPowerColor",  "Holy Power",   "HOLY_POWER")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("furyColor",       "Fury",         "FURY")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("painColor",       "Pain",         "PAIN")), -- [FOREVER] F12/F16
+                ForeverHidden(PowerColor("essenceColor",    "Essence",      "ESSENCE")), -- [FOREVER] F12/F16
                 ResetButton(function()
                     local gp = GetGP()
                     if gp then gp.customPowerColors = nil end
@@ -440,13 +442,13 @@ function BuzzardFramesOptions:ColorsPage()
                   end },
                 -- 13 classes in the order Blizzard's own UI shows them,
                 -- which is alphabetical rather than by class ID.
-                ClassColor("deathknightColor", "Death Knight", "DEATHKNIGHT"),
-                ClassColor("demonhunterColor", "Demon Hunter", "DEMONHUNTER"),
+                ForeverHidden(ClassColor("deathknightColor", "Death Knight", "DEATHKNIGHT")), -- [FOREVER] F11
+                ForeverHidden(ClassColor("demonhunterColor", "Demon Hunter", "DEMONHUNTER")), -- [FOREVER] F11
                 ClassColor("druidColor",       "Druid",        "DRUID"),
-                ClassColor("evokerColor",      "Evoker",       "EVOKER"),
+                ForeverHidden(ClassColor("evokerColor",      "Evoker",       "EVOKER")), -- [FOREVER] F11
                 ClassColor("hunterColor",      "Hunter",       "HUNTER"),
                 ClassColor("mageColor",        "Mage",         "MAGE"),
-                ClassColor("monkColor",        "Monk",         "MONK"),
+                ForeverHidden(ClassColor("monkColor",        "Monk",         "MONK")), -- [FOREVER] F11
                 ClassColor("paladinColor",     "Paladin",      "PALADIN"),
                 ClassColor("priestColor",      "Priest",       "PRIEST"),
                 ClassColor("rogueColor",       "Rogue",        "ROGUE"),

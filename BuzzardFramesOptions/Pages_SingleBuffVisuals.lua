@@ -1,7 +1,7 @@
 -- ============================================================
 -- BuzzardFramesOptions: Pages_SingleBuffVisuals.lua
 --
--- The four VISUAL subtabs of a Buff List entry -- Icon, Icon Effects,
+-- The five VISUAL subtabs of a Buff List entry -- Icon, Icon Effects, Bar,
 -- Cooldown Text and Frame Effects -- as BuzzardPanel groups. These are the
 -- per-spell customization surface: what a "Show (Customized Buff)" entry
 -- gets over and above its container's own settings.
@@ -29,8 +29,14 @@
 -- visual family.
 --
 -- Entry point: BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid), which
--- returns { icon = groups, iconEffects = groups, cooldownText = groups,
--- frameEffects = groups }. `getC` resolves the entry's container fresh on
+-- returns { icon = groups, iconEffects = groups, bar = groups,
+-- cooldownText = groups, frameEffects = groups } plus the Show Icon
+-- predicates the Buff List gates its own two size cards with, and (since the
+-- Display-tab redesign, 2026-10-14) the Display-tab pieces that live on this
+-- store: the Show Buff Icon / Show Text in place of Icon gates, the Show
+-- Cooldown Text switch, and the Show Buff Bar, Bar Position and Show Frame
+-- Effects cards. Customize Buff gates only the Icon, Icon Effects and Cooldown
+-- Text (icon) surfaces now. `getC` resolves the entry's container fresh on
 -- every call -- by KEY, never by array index, because deleting another
 -- entry renumbers the array under a closure that outlives the rebuild.
 -- ============================================================
@@ -64,6 +70,47 @@ local FONT_BORDER_OPTIONS = {
     { value = "OUTLINE, MONOCHROME",       text = "Outline + Monochrome" },
     { value = "THICKOUTLINE, MONOCHROME",  text = "Thick Outline + Monochrome" },
 }
+
+-- The statusbar textures LibSharedMedia knows, alphabetical -- the same
+-- list every other statusbar picker in this panel offers, previews and
+-- all: each entry carries its `texture`, which the dropdown draws behind
+-- the name in the menu and on the control once it is picked.
+local function StatusbarOptions()
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    local out, names = {}, {}
+    if LSM then
+        for name in pairs(LSM:HashTable("statusbar")) do
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    for i = 1, #names do
+        out[i] = { value = names[i], text = names[i],
+                   texture = LSM:Fetch("statusbar", names[i]) }
+    end
+    return out
+end
+
+-- Bar defaults. Sizes are FRACTIONS of the health bar (shown 0-100 on the
+-- sliders, the Cast Bar's convention): the long side spans the health bar,
+-- the short side is a twentieth of it, and which side is long follows the
+-- Direction. Colors are never handed out by reference (see IE_DEFAULT_*).
+local BAR_DEFAULT_LONG   = 1.0
+local BAR_DEFAULT_SHORT  = 0.05
+local BAR_DEFAULT_ANCHOR = "BOTTOM"
+local BAR_DEFAULT_COLOR    = { r = 0.24, g = 1.0, b = 0.25, a = 1.0 }
+local BAR_DEFAULT_BG       = { r = 0, g = 0, b = 0, a = 0.5 }
+local BAR_DEFAULT_BORDER   = { r = 0, g = 0, b = 0, a = 1 }
+local BAR_DEFAULT_TEXTURE  = "Solid"
+
+-- The anchor edges that decide which push toggle a bar with Show Empty Bar
+-- When Missing offers: a horizontal bar on the bottom or top edge, a
+-- vertical bar on the left or right edge. Corners count for both of their
+-- edges; CENTER and the flow hosts count for none.
+local BAR_BOTTOM_EDGE = { BOTTOM = true, BOTTOMLEFT = true, BOTTOMRIGHT = true }
+local BAR_TOP_EDGE    = { TOP = true,    TOPLEFT = true,    TOPRIGHT = true }
+local BAR_SIDE_EDGE   = { LEFT = true,  TOPLEFT = true,  BOTTOMLEFT = true,
+                          RIGHT = true, TOPRIGHT = true, BOTTOMRIGHT = true }
 
 -- ── Refresh helpers ────────────────────────────────────────────
 --
@@ -205,6 +252,20 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         if not c.sbVisuals then c.sbVisuals = {} end
         return c.sbVisuals
     end
+    -- Round 2 (review A3 follow-up): drop a family's map, then the family,
+    -- once a setter has emptied them -- IE_SET's drop-when-empty applied one
+    -- and two levels up. A turned-off setting leaves nothing behind, so the
+    -- store reads the same as one that was never touched (the render side's
+    -- "has visuals" test, BuffsAndContainers SingleBuffRootHasVisuals, also
+    -- ignores leftovers; this keeps saved variables clean as well).
+    local function pruneFamily(family)
+        local p = SROOT()
+        local fam = p[family]
+        if type(fam) ~= "table" then return end
+        local t = fam[kSpec]
+        if type(t) == "table" and next(t) == nil then fam[kSpec] = nil end
+        if next(fam) == nil then p[family] = nil end
+    end
 
     -- ── Icon Effects storage ───────────────────────────────────
     -- ONE entry table per spell: sbVisuals.specSpellIconEffect["sb"][sid].
@@ -225,6 +286,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         if not e then e = {}; p.specSpellIconEffect[kSpec][sid] = e end
         mutate(e)
         if next(e) == nil then p.specSpellIconEffect[kSpec][sid] = nil end
+        pruneFamily("specSpellIconEffect")
         Rebuild()
         IconEffectsPreviewSoon()
         Repaint(ctx)
@@ -322,13 +384,127 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         Repaint(ctx)
     end
 
+    -- ── Show Icon / Show Text in place of Icon ─────────────────
+    -- Two per-entry flags, one family each, both stored ONLY when they
+    -- differ from the default so an entry that never touched them carries
+    -- nothing (and nothing migrates):
+    --   sbVisuals.specSpellIconHidden["sb"][sid]  = true  -- Show Icon OFF
+    --   sbVisuals.specSpellTextInPlace["sb"][sid] = true  -- text in its place
+    -- Neither is per-Layout and neither sits under the Cooldown Text
+    -- Override: they decide what the entry IS, not how its text looks.
+    -- BuzzardFramesOptions.SingleBuffIconHidden (below the tabs) reads the
+    -- first from the RECORD, for the tab gates.
+    local function iconOff()
+        local p = SROOT()
+        local t = p.specSpellIconHidden and p.specSpellIconHidden[kSpec]
+        return (t and t[sid]) == true
+    end
+    local function textInPlaceOn()
+        local p = SROOT()
+        local t = p.specSpellTextInPlace and p.specSpellTextInPlace[kSpec]
+        return (t and t[sid]) == true
+    end
+    local function setEntryFlag(family, on)
+        local p = SROOT()
+        if on then
+            if not p[family] then p[family] = {} end
+            if not p[family][kSpec] then p[family][kSpec] = {} end
+            p[family][kSpec][sid] = true
+        else
+            local t = p[family] and p[family][kSpec]
+            if t then t[sid] = nil end
+            -- Review fix A3 / round 2: Show Icon back on, or Text In Place
+            -- off, leaves nothing behind -- the emptied map and family go.
+            pruneFamily(family)
+        end
+    end
+    -- The Cooldown Text tab with the icon off and no text standing in for
+    -- it: nothing on the entry shows a duration, so the tab offers only the
+    -- toggle that would bring the text back.
+    local function cdtCollapsed() return iconOff() and not textInPlaceOn() end
+    local function textAreaHidden() return not (iconOff() and textInPlaceOn()) end
+
     -- ══════════════════════════════════════════════════════════
     -- ICON
     -- ══════════════════════════════════════════════════════════
     local icon = {}
 
-    icon[#icon + 1] = { title = "Buff Icon", preset = "form", fields = {
-        { control = "dropdown", label = "Icon Type",
+    -- Display-tab redesign (owner, 2026-10-14): SHOW BUFF ICON is the header
+    -- gate of the Display tab's "Show Buff Icon" card, built by the Buff List
+    -- (Pages_AuraContainers SingleBuffCard) from this toggle. It is NOT an
+    -- icon customization -- it works with Customize Buff off too -- so it no
+    -- longer lives on this tab, which exists only while the icon is shown
+    -- AND customized.
+    local showIconToggle = {
+        id = "sbShowIcon", default = true, disabled = "combat",
+        tooltip = "Show Buff Icon",
+        desc = "When disabled, this buff draws no icon. Its bar and frame "
+            .. "effects still apply, and its duration text can stand in the "
+            .. "icon's place (Show Text in place of Icon).",
+        get = function() return not iconOff() end,
+        set = function(_, ctx, val)
+            if InCombatLockdown() then return end
+            setEntryFlag("specSpellIconHidden", not val)
+            Rebuild()
+            PreviewSoon()
+            -- Which tabs EXIST follows this flag (Icon, Icon Effects,
+            -- Cooldown Text), so the entry's routes are re-derived.
+            ctx.app:Invalidate("singleBuffs")
+            Repaint(ctx)
+        end,
+    }
+
+    -- Display-tab redesign: SHOW COOLDOWN TEXT, per entry, default ON, in the
+    -- Display tab's Show Buff Icon card beside Customize Buff. A property of
+    -- the CUSTOMIZED icon, so it shows only while Customize Buff is on; off,
+    -- the icon draws no duration text (DeriveSpellButtonSpec) and the Cooldown
+    -- Text tab goes (a route change -> Invalidate). Stored only when OFF
+    -- (specSpellCooldownTextOff["sb"][sid] = true).
+    local function customizedOn()
+        local c = getC()
+        return type(c) == "table" and c.singleBuffCustomized ~= false
+    end
+    local function cooldownTextOff()
+        local p = SROOT()
+        local t = p.specSpellCooldownTextOff and p.specSpellCooldownTextOff[kSpec]
+        return (t and t[sid]) == true
+    end
+    local showCooldownTextField = {
+        control = "switch", label = "Show Cooldown Text", labelSide = "after",
+        desc = "Show this buff's duration text on its icon. When disabled, "
+            .. "the icon shows no duration text (stacks are unchanged) and "
+            .. "the Cooldown Text tab is hidden.",
+        id = "sbShowCooldownText", default = true, disabled = "combat",
+        hidden = function() return not customizedOn() end,
+        get = function() return not cooldownTextOff() end,
+        set = function(_, ctx, val)
+            if InCombatLockdown() then return end
+            setEntryFlag("specSpellCooldownTextOff", not val)
+            Rebuild()
+            PreviewSoon()
+            if ctx and ctx.app then ctx.app:Invalidate("singleBuffs") end
+            Repaint(ctx)
+        end,
+    }
+
+    -- Owner ruling (2026-10-14): the switch stays visible for a Square colored
+    -- by remaining time, where it does nothing (that square IS the duration
+    -- text -- DeriveSpellButtonSpec exempts it); a red note directly below
+    -- says so, only in that case (SingleBuffSquareColorByDuration).
+    local showCooldownTextNote = {
+        control = "note", wide = true,
+        text = "|cffff8080Show Cooldown Text has no effect while \"Change "
+            .. "Color Based on Remaining Time\" is enabled for this icon.|r",
+        hidden = function()
+            if not customizedOn() then return true end
+            local f = BuzzardFramesOptions.SingleBuffSquareColorByDuration
+            return not (f and f(getC(), sid))
+        end,
+    }
+
+    icon[#icon + 1] = { title = "Buff Icon", preset = "form",
+      fields = {
+        { control = "segmented", label = "Icon Type",
           desc = "Icon: normal spell texture. Square: solid color square -- "
               .. "border configurable in the Icon Border group, and its color "
               .. "can change based on the buff's remaining time (Icon Color "
@@ -336,6 +512,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
           options = { { value = "Icon", text = "Icon" },
                       { value = "Square", text = "Square" } },
           id = "sbIconType", default = "Icon", disabled = "combat",
+          hidden = iconOff,
           get = function() return effIconType() or "Icon" end,
           set = function(_, ctx, val)
               if InCombatLockdown() then return end
@@ -360,6 +537,11 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
                       p.specSpellSolidIcons[kSpec][sid].enabled = nil
                   end
               end
+              -- Round 2: back to Icon leaves no empty maps. The solid row
+              -- itself stays (enabled = false keeps the Square's colors for a
+              -- switch back, and carries the Icon's own border fields).
+              pruneFamily("specSpellIconType")
+              pruneFamily("specSpellSolidIcons")
               Rebuild()
               PreviewSoon()
               -- Whether the Cooldown Text tab EXISTS depends on the type
@@ -370,7 +552,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
           end },
     }}
 
-    icon[#icon + 1] = { title = "Icon Color", preset = "form", fields = {
+    icon[#icon + 1] = { title = "Icon Color", preset = "form", hidden = iconOff, fields = {
         { control = "color", label = "Icon Color", alpha = true,
           id = "sbSolidIconColor", disabled = "combat", hidden = notSquare,
           get = function()
@@ -625,7 +807,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         end,
     })
 
-    icon[#icon + 1] = { title = "Icon Border", preset = "form", fields = {
+    icon[#icon + 1] = { title = "Icon Border", preset = "form", hidden = iconOff, fields = {
         -- Shown for BOTH icon types. Turning it OFF exposes that type's own
         -- border controls -- the Icon set (style/thickness) or the Square
         -- set (Show Border/style). All stored on the shared solidIcons
@@ -720,6 +902,8 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
               elseif e then
                   e.enabled = false
               end
+              -- Round 3: turning it off with no row leaves no empty map.
+              pruneFamily("specSpellBorderColors")
               Rebuild()
               PreviewSoon()
               Repaint(ctx)
@@ -773,7 +957,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         -- ONLY these two, by design: every other glow style is
         -- OnUpdate-driven, and SetScript is refused on engine-owned aura
         -- buttons and their descendants.
-        { control = "dropdown", label = "Glow Style",
+        { control = "segmented", label = "Glow Style",
           desc = "Steady draws the ring at a constant strength; Pulsing fades "
               .. "it in and out.",
           options = { { value = "steady", text = "Steady" },
@@ -952,7 +1136,30 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
 
     local cooldownText = {}
 
-    cooldownText[#cooldownText + 1] = { preset = "form", fields = {
+    -- Display-tab redesign: SHOW TEXT IN PLACE OF ICON is the header gate of
+    -- the Display tab's card of that name (the Buff List builds it, with the
+    -- Text Area Size fields inside). It no longer sits on this tab and no
+    -- longer needs Customize Buff; while it is on, this tab styles the text.
+    local textInPlaceToggle = {
+        id = "sbTextInPlaceOfIcon", default = false, disabled = "combat",
+        tooltip = "Show Text in place of Icon",
+        desc = "With Show Buff Icon disabled, show this buff's duration text "
+            .. "where the icon would have been, styled on the Cooldown Text "
+            .. "tab. When disabled, the buff shows no duration text and takes "
+            .. "no space among the icons it is anchored with.",
+        get = textInPlaceOn,
+        set = function(_, ctx, val)
+            if InCombatLockdown() then return end
+            setEntryFlag("specSpellTextInPlace", val)
+            Rebuild()
+            PreviewSoon()
+            -- The Cooldown Text tab exists in text mode, so routes change.
+            if ctx and ctx.app then ctx.app:Invalidate("singleBuffs") end
+            Repaint(ctx)
+        end,
+    }
+
+    cooldownText[#cooldownText + 1] = { preset = "form", hidden = cdtCollapsed, fields = {
         { control = "switch", width = "full", labelSide = "after",
           label = "|cff87ceebEnable per-Layout Config|r",
           desc = "Enabling this option will allow you to have different "
@@ -1048,8 +1255,10 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
           end },
     }}
 
+    -- No icon, no swipe: hidden whenever Show Icon is off, text in its
+    -- place or not.
     cooldownText[#cooldownText + 1] = { title = "Cooldown Swipe", preset = "form",
-        hidden = cdtSettingsHidden, fields = {
+        hidden = function() return cdtSettingsHidden() or iconOff() end, fields = {
         { control = "switch", labelSide = "after", label = "Disable Cooldown Swipe",
           id = "sbDisableSwipe", default = false, disabled = "combat",
           get = function() return cdtEff("disableSwipe") end,
@@ -1066,7 +1275,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
     }}
 
     cooldownText[#cooldownText + 1] = { title = "Duration Text", preset = "form",
-        hidden = cdtSettingsHidden, fields = {
+        hidden = function() return cdtSettingsHidden() or cdtCollapsed() end, fields = {
         { control = "switch", labelSide = "after", label = "Show Duration Numbers",
           id = "sbShowDuration", default = true, disabled = "combat",
           get = function() return cdtEff("showDuration") end,
@@ -1105,7 +1314,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
     }}
 
     cooldownText[#cooldownText + 1] = { title = "Font", preset = "form",
-        hidden = function() return cdtSettingsHidden() or durShowOff() end, fields = {
+        hidden = function() return cdtSettingsHidden() or durShowOff() or cdtCollapsed() end, fields = {
         { control = "dropdown", label = "Font",
           id = "sbDurationFont", disabled = "combat",
           options = function()
@@ -1152,7 +1361,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
     local function cdtThreshold2Off() return cdtThresholdOff() or not cdtField("threshold2ColorEnabled") end
 
     cooldownText[#cooldownText + 1] = { title = "Duration Numbers Color", preset = "form",
-        hidden = function() return cdtSettingsHidden() or durShowOff() end, fields = {
+        hidden = function() return cdtSettingsHidden() or durShowOff() or cdtCollapsed() end, fields = {
         { control = "color", label = "Duration Text Color", alpha = true,
           desc = "Color of the duration timer text. When Threshold Color is "
               .. "enabled, this is the color used above the threshold.",
@@ -1262,6 +1471,450 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
     }}
 
     -- ══════════════════════════════════════════════════════════
+    -- BAR
+    -- ══════════════════════════════════════════════════════════
+    -- sbVisuals.specSpellBar["sb"][sid]: a duration bar of the entry's own,
+    -- independent of its icon -- an entry may show an icon, a bar, or both,
+    -- and each is configured on its own tab. The same per-Layout shape the
+    -- Cooldown Text family has: the entry's own fields, plus a
+    -- groupSettings[<layout>] tier under it while "Enable per-Layout
+    -- Config" is on, where a field the tier has not set falls back to the
+    -- entry's. EVERY bar setting goes through that tier, size and position
+    -- included. Unlike cdtEffective nothing here creates a table on READ,
+    -- so a widget merely rendering cannot litter saved variables.
+    -- BF.GetSpellBar resolves the same shape on the render side.
+    --
+    -- Every setter writes an EXPLICIT value (false, "HORIZONTAL", ...),
+    -- never nil-for-default: in the per-Layout tier a nil is "inherit the
+    -- entry's", which is not the same thing as the default.
+    local function barEntry()
+        local p = SROOT()
+        local t = p.specSpellBar and p.specSpellBar[kSpec]
+        return t and t[sid]
+    end
+    local function ensureBarEntry()
+        local p = SROOT()
+        if not p.specSpellBar then p.specSpellBar = {} end
+        if not p.specSpellBar[kSpec] then p.specSpellBar[kSpec] = {} end
+        if not p.specSpellBar[kSpec][sid] then p.specSpellBar[kSpec][sid] = {} end
+        return p.specSpellBar[kSpec][sid]
+    end
+    local function barField(name)
+        local entry = barEntry()
+        if not entry then return nil end
+        local v
+        if entry.separateGroupConfig then
+            local gs = entry.groupSettings and entry.groupSettings[EditingGroupType()]
+            v = gs and gs[name]
+        end
+        if v == nil then v = entry[name] end
+        return v
+    end
+    local function barWriteTarget()
+        local entry = ensureBarEntry()
+        if entry.separateGroupConfig then
+            local key = EditingGroupType()
+            if not entry.groupSettings then entry.groupSettings = {} end
+            if not entry.groupSettings[key] then entry.groupSettings[key] = {} end
+            return entry.groupSettings[key], entry
+        end
+        return entry, entry
+    end
+    -- One mutation, one refresh path -- the IE_SET shape. Settings only:
+    -- the render side picks every one of these up on its next pass.
+    local function BAR_SET(ctx, mutate)
+        if InCombatLockdown() then return end
+        mutate((barWriteTarget()))
+        Rebuild()
+        PreviewSoon()
+        Repaint(ctx)
+    end
+    local function barSet(name)
+        return function(_, ctx, val)
+            BAR_SET(ctx, function(s) s[name] = val end)
+        end
+    end
+    local function barColorGet(name, d)
+        return function()
+            local c = barField(name) or d
+            return ColorOut(c.r or d.r, c.g or d.g, c.b or d.b, c.a or d.a)
+        end
+    end
+    local function barColorSet(name)
+        return function(_, ctx, v)
+            BAR_SET(nil, function(s)
+                s[name] = { r = v[1], g = v[2], b = v[3], a = v[4] }
+            end)
+        end
+    end
+
+    local function barOff()        return barField("showBar") ~= true end
+    local function barPerLayoutOff()
+        local entry = barEntry()
+        return not entry or not entry.separateGroupConfig
+    end
+    local function barVertical()   return barField("orientation") == "VERTICAL" end
+    -- Effective size fractions: stored, else the Direction's default.
+    local function barWidth()
+        local v = barField("widthPct")
+        if v == nil then v = barVertical() and BAR_DEFAULT_SHORT or BAR_DEFAULT_LONG end
+        return v
+    end
+    local function barHeight()
+        local v = barField("heightPct")
+        if v == nil then v = barVertical() and BAR_DEFAULT_LONG or BAR_DEFAULT_SHORT end
+        return v
+    end
+    local function barAnchor()     return barField("anchorPoint") or BAR_DEFAULT_ANCHOR end
+    local function barFlowAnchored()
+        local bf = BF()
+        return (bf and bf.IsFlowAnchorValue and bf.IsFlowAnchorValue(barAnchor())) and true or false
+    end
+    local function barNotFlowAnchored() return not barFlowAnchored() end
+    local function barEmptyOff()
+        return barFlowAnchored() or barField("showEmptyBar") ~= true
+    end
+    -- Which ONE push toggle the bar's Direction and anchor edge call for,
+    -- as the stored key it writes, or nil for none. Three keys rather than
+    -- one shared flag, so turning the bar or moving it to another edge
+    -- never carries a push the reader turned on for a different edge.
+    local function barPushKey()
+        if barFlowAnchored() then return nil end
+        local a = barAnchor()
+        if barVertical() then
+            return BAR_SIDE_EDGE[a] and "pushAurasAside" or nil
+        end
+        if BAR_BOTTOM_EDGE[a] then return "placeAurasAbove" end
+        if BAR_TOP_EDGE[a]    then return "placeAurasBelow" end
+        return nil
+    end
+    local function barPushHidden(key)
+        return function() return barEmptyOff() or barPushKey() ~= key end
+    end
+    -- The size sliders show 0-100 and store a fraction (the Cast Bar's
+    -- convention), so the stored value is what the render side multiplies
+    -- the health bar's size by.
+    local function barPctGet(read)
+        return function() return math.floor(read() * 100 + 0.5) end
+    end
+    local function barPctSet(name)
+        return function(_, ctx, val)
+            BAR_SET(nil, function(s) s[name] = val / 100 end)
+        end
+    end
+
+    local bar = {}
+
+    bar[#bar + 1] = { preset = "form", fields = {
+        { control = "switch", width = "full", labelSide = "after",
+          label = "|cff87ceebEnable per-Layout Config|r",
+          desc = "Enabling this option will allow you to have different "
+              .. "settings for each Layout (e.g. Party vs. Raid) or Custom "
+              .. "Frame Group.",
+          id = "sbBarSeparateGroupConfig", default = false, disabled = "combat",
+          get = function()
+              local entry = barEntry()
+              return (entry and entry.separateGroupConfig) or false
+          end,
+          set = function(_, ctx, val)
+              if InCombatLockdown() then return end
+              local entry = ensureBarEntry()
+              entry.separateGroupConfig = val
+              if val and not entry.groupSettings then entry.groupSettings = {} end
+              Rebuild()
+              PreviewSoon()
+              -- Display-tab redesign: the Bar tab exists while Show Bar is on
+              -- for SOME Layout, and which tiers are read follows this flag.
+              if ctx and ctx.app then ctx.app:Invalidate("singleBuffs") end
+              Repaint(ctx)
+          end },
+        { control = "dropdown", label = "Layout/Custom Frame Group",
+          desc = "Select which Layout or Custom Frame Group to configure "
+              .. "settings for.",
+          options = GroupTypeOptions,
+          id = "sbBarEditingGroupType", disabled = "combat",
+          hidden = barPerLayoutOff,
+          get = function() return EditingGroupType() end,
+          set = function(_, ctx, val)
+              spellEditingGroupType = val
+              Repaint(ctx)
+          end },
+    }}
+
+    -- Review item B2: Show Bar is the Buff Bar card's HEADER toggle (the
+    -- BuzzardPanel group gate): off collapses this card to its header, and
+    -- every other bar card stays hidden (barOff) as before. Still per Layout
+    -- -- the same barField read and BAR_SET write the strip switch used, so
+    -- the tier logic is unchanged; the per-Layout switch and the Layout
+    -- dropdown stay in the strip above.
+    -- OFF by default: an icon and a bar are independent, so a bar is
+    -- something an entry opts into, never something it gains.
+    --
+    -- Display-tab redesign: Show Bar moved again, to the header gate of the
+    -- Display tab's own "Show Buff Bar" card (built here, placed by the Buff
+    -- List), with the SAME per-Layout read and write (barField / BAR_SET
+    -- through the editing Layout's tier). The bar no longer needs Customize
+    -- Buff. This tab exists only while Show Bar is on for some Layout, and
+    -- its cards still hide for an editing Layout whose tier has it off.
+    local showBarCard = { title = "Show Buff Bar", preset = "form",
+      toggle = {
+          id = "sbShowBar", default = false, disabled = "combat",
+          tooltip = "Show Buff Bar",
+          desc = "Show a bar that drains (or fills) over this buff's "
+              .. "duration. It is independent of the icon: this buff can "
+              .. "show its icon, its bar, or both.",
+          get = function() return not barOff() end,
+          set = function(_, ctx, val)
+              BAR_SET(ctx, function(s) s.showBar = val end)
+              -- Whether the Bar tab EXISTS follows this flag.
+              if ctx and ctx.app then ctx.app:Invalidate("singleBuffs") end
+          end,
+      },
+      fields = {} }
+
+    bar[#bar + 1] = { title = "Buff Bar", preset = "form", hidden = barOff,
+      fields = {
+        { control = "segmented", label = "Direction",
+          desc = "Horizontal bars run along the frame's width, vertical "
+              .. "bars along its height. Changing it swaps Bar Width and "
+              .. "Bar Height, so the bar turns rather than changing shape.",
+          options = { { value = "HORIZONTAL", text = "Horizontal" },
+                      { value = "VERTICAL",   text = "Vertical" } },
+          id = "sbBarOrientation", default = "HORIZONTAL", disabled = "combat",
+          get = function() return barVertical() and "VERTICAL" or "HORIZONTAL" end,
+          set = function(_, ctx, val)
+              val = (val == "VERTICAL") and "VERTICAL" or "HORIZONTAL"
+              if val == (barVertical() and "VERTICAL" or "HORIZONTAL") then return end
+              BAR_SET(ctx, function(s)
+                  -- Only a size somebody SET is swapped; an unset one
+                  -- already follows the Direction through its default.
+                  if barField("widthPct") ~= nil or barField("heightPct") ~= nil then
+                      local w, h = barWidth(), barHeight()
+                      s.widthPct, s.heightPct = h, w
+                  end
+                  s.orientation = val
+              end)
+          end },
+        -- No break after Direction (owner, 2026-10-14): the two sizes share
+        -- its line where they fit, and wrap only where they do not.
+        -- The unit is the slider's `suffix`, not the label: the library
+        -- shows it on the range ends (1% / 100%) and in the value box.
+        { control = "slider", label = "Bar Width", suffix = "%",
+          desc = "Width of the bar as a percentage of the health bar's width.",
+          min = 1, max = 100, step = 1,
+          id = "sbBarWidthPct", disabled = "combat",
+          get = barPctGet(barWidth), set = barPctSet("widthPct") },
+        { control = "slider", label = "Bar Height", suffix = "%",
+          desc = "Height of the bar as a percentage of the health bar's height.",
+          min = 1, max = 100, step = 1,
+          id = "sbBarHeightPct", disabled = "combat",
+          get = barPctGet(barHeight), set = barPctSet("heightPct") },
+        { control = "linebreak" },
+        { control = "segmented", label = "Fill Mode",
+          desc = "Drain: the bar starts full and empties as the buff runs "
+              .. "out. Fill: the bar starts empty and fills up.",
+          options = { { value = "DRAIN", text = "Drain" },
+                      { value = "FILL",  text = "Fill" } },
+          id = "sbBarFillMode", default = "DRAIN", disabled = "combat",
+          get = function() return barField("fillMode") or "DRAIN" end,
+          set = barSet("fillMode") },
+        { control = "switch", labelSide = "after", label = "Reverse Fill",
+          desc = "Fill the bar from the opposite end: right to left for a "
+              .. "horizontal bar, top to bottom for a vertical one.",
+          id = "sbBarReverseFill", default = false, disabled = "combat",
+          get = function() return barField("reverseFill") == true end,
+          set = barSet("reverseFill") },
+        { control = "switch", labelSide = "after", label = "Smooth Fill",
+          desc = "Animate the bar smoothly when the buff is refreshed, "
+              .. "instead of jumping to its new length.",
+          -- ON by default (owner, 2026-10-14): only a stored false is off,
+          -- the resolver's rule (BF.ResolveSpellBarSpec).
+          id = "sbBarSmoothFill", default = true, disabled = "combat",
+          get = function() return barField("smoothFill") ~= false end,
+          set = barSet("smoothFill") },
+    }}
+
+    -- The bar's position card is on the BAR tab, directly below Buff Bar
+    -- (owner, 2026-10-14; it was on the Display tab), with the same bar
+    -- tier logic; shown while Show Bar is on for the editing Layout.
+    -- The bar's OWN anchor, never relative to the icon. The same list the
+    -- entry's Icon Position card offers, flow hosts included: anchored to one
+    -- of those the bar flows among that display's icons, so X/Y Offset give
+    -- way to Relative Order exactly as they do for the icon.
+    local barPositionCard = { title = "Bar Position", preset = "form", hidden = barOff, fields = {
+        { control = "dropdown", label = "Anchor Point",
+          desc = "Where the bar sits on the frame.\n\n|cffffd100Buffs|r, "
+              .. "|cffffd100Big Defensive|r and each buff container flow the "
+              .. "bar inside that display's icons instead of positioning it "
+              .. "on its own.",
+          options = function()
+              local f = BuzzardFramesOptions.SingleBuffAnchorOptions
+              return (f and f()) or {}
+          end,
+          id = "sbBarAnchorPoint", default = BAR_DEFAULT_ANCHOR, disabled = "combat",
+          get = barAnchor,
+          set = barSet("anchorPoint") },
+        { control = "slider", label = "X Offset", min = -60, max = 60, step = 1,
+          id = "sbBarOffsetX", default = 0, disabled = "combat",
+          hidden = barFlowAnchored,
+          get = function() return barField("offsetX") or 0 end,
+          set = barSet("offsetX") },
+        { control = "slider", label = "Y Offset", min = -60, max = 60, step = 1,
+          id = "sbBarOffsetY", default = 0, disabled = "combat",
+          hidden = barFlowAnchored,
+          get = function() return barField("offsetY") or 0 end,
+          set = barSet("offsetY") },
+        { control = "segmented", label = "Relative Order",
+          desc = "Whether the bar flows before or after the icons of the "
+              .. "display it is anchored to.",
+          options = { { value = "BEFORE", text = "Before" },
+                      { value = "AFTER",  text = "After" } },
+          id = "sbBarRelativeOrder", default = "BEFORE", disabled = "combat",
+          hidden = barNotFlowAnchored,
+          get = function() return barField("relativeOrder") or "BEFORE" end,
+          set = barSet("relativeOrder") },
+        -- Not offered for a flow host: there the bar takes its room in the
+        -- host's flow only while the buff is up, and the icons move around
+        -- it on their own. Not forced onto a line of its own (owner,
+        -- 2026-10-14): it sits beside the offsets where it fits.
+        { control = "switch", labelSide = "after",
+          label = "Show Empty Bar When Missing",
+          desc = "Keep the bar's background on the frame while this buff is "
+              .. "missing, so the bar's place is always visible and the "
+              .. "frame's other auras can be moved clear of it.",
+          id = "sbBarShowEmpty", default = false, disabled = "combat",
+          hidden = barFlowAnchored,
+          get = function() return barField("showEmptyBar") == true end,
+          set = barSet("showEmptyBar") },
+        -- Exactly one of these three is ever on screen: the one the bar's
+        -- Direction and anchor edge call for (barPushKey).
+        { control = "switch", width = "full", labelSide = "after",
+          label = "Place Auras Above Buff Bar",
+          desc = "Move the auras anchored to the bottom of the frame up, "
+              .. "clear of this bar.",
+          id = "sbBarPlaceAurasAbove", default = false, disabled = "combat",
+          hidden = barPushHidden("placeAurasAbove"),
+          get = function() return barField("placeAurasAbove") == true end,
+          set = barSet("placeAurasAbove") },
+        { control = "switch", width = "full", labelSide = "after",
+          label = "Place Auras Below Buff Bar",
+          desc = "Move the auras anchored to the top of the frame down, "
+              .. "clear of this bar.",
+          id = "sbBarPlaceAurasBelow", default = false, disabled = "combat",
+          hidden = barPushHidden("placeAurasBelow"),
+          get = function() return barField("placeAurasBelow") == true end,
+          set = barSet("placeAurasBelow") },
+        { control = "switch", width = "full", labelSide = "after",
+          label = "Push Auras Aside",
+          desc = "Move the auras anchored to this side of the frame inward, "
+              .. "clear of this bar.",
+          id = "sbBarPushAurasAside", default = false, disabled = "combat",
+          hidden = barPushHidden("pushAurasAside"),
+          get = function() return barField("pushAurasAside") == true end,
+          set = barSet("pushAurasAside") },
+    }}
+
+    bar[#bar + 1] = barPositionCard
+
+    bar[#bar + 1] = { title = "Appearance", preset = "form", hidden = barOff, fields = {
+        { control = "switch", width = "full", labelSide = "after",
+          label = "|cFF87CEEBUse Health Bar Texture|r",
+          desc = "When enabled, the bar uses the health bar texture of the "
+              .. "Layout it is shown on, and follows it when that changes. "
+              .. "Disable it to pick a texture for this bar.",
+          id = "sbBarUseHealthTexture", default = true, disabled = "combat",
+          get = function() return barField("useHealthTexture") ~= false end,
+          set = barSet("useHealthTexture") },
+        { control = "dropdown", label = "Bar Texture",
+          desc = "Statusbar fill texture for this bar.",
+          options = StatusbarOptions,
+          id = "sbBarTexture", disabled = "combat",
+          hidden = function() return barField("useHealthTexture") ~= false end,
+          get = function() return barField("texture") or BAR_DEFAULT_TEXTURE end,
+          set = barSet("texture") },
+        { control = "linebreak" },
+        { control = "color", label = "Bar Color", alpha = true,
+          id = "sbBarColor", disabled = "combat",
+          get = barColorGet("color", BAR_DEFAULT_COLOR),
+          set = barColorSet("color") },
+        { control = "color", label = "Background Color", alpha = true,
+          id = "sbBarBackgroundColor", disabled = "combat",
+          get = barColorGet("backgroundColor", BAR_DEFAULT_BG),
+          set = barColorSet("backgroundColor") },
+        { control = "segmented", label = "Background Covers",
+          desc = "Whole Bar: the background spans the whole bar, under the "
+              .. "fill. Unfilled Part: only the part the fill has not "
+              .. "reached shows the background.",
+          options = { { value = "WHOLE",    text = "Whole Bar" },
+                      { value = "UNFILLED", text = "Unfilled Part" } },
+          id = "sbBarBackgroundCovers", default = "WHOLE", disabled = "combat",
+          -- Owner ruling 2026-10-13: with Show Empty Bar When Missing on (a
+          -- frame-positioned bar), the empty bar draws the background over
+          -- the WHOLE bar and the render forces Whole Bar
+          -- (BF.ResolveSpellBarSpec), so this choice is hidden. The stored
+          -- value is untouched: switching the empty bar off restores it. The
+          -- empty-bar switch's setter repaints the page (BAR_SET -> Repaint),
+          -- which re-evaluates this.
+          hidden = function()
+              return barNotFlowAnchored() and barField("showEmptyBar") == true
+          end,
+          get = function() return barField("backgroundCovers") or "WHOLE" end,
+          set = barSet("backgroundCovers") },
+    }}
+
+    -- "flat" is the Square literal every border on this panel stores.
+    local function barBorderOff() return barField("borderStyle") ~= "flat" end
+    bar[#bar + 1] = { title = "Border", preset = "form", hidden = barOff, fields = {
+        { control = "segmented", label = "Border",
+          desc = "None draws no border. Square draws a flat colored border "
+              .. "around the bar.",
+          options = { { value = "none", text = "None" },
+                      { value = "flat", text = "Square" } },
+          id = "sbBarBorderStyle", default = "none", disabled = "combat",
+          get = function() return barBorderOff() and "none" or "flat" end,
+          set = barSet("borderStyle") },
+        { control = "stepper", label = "Border Thickness", min = 1, max = 5, step = 1,
+          desc = "Thickness of the bar's border.",
+          id = "sbBarBorderThickness", default = 1, disabled = "combat",
+          hidden = barBorderOff,
+          get = function() return barField("borderThickness") or 1 end,
+          set = barSet("borderThickness") },
+        { control = "color", label = "Border Color", alpha = true,
+          id = "sbBarBorderColor", disabled = "combat",
+          hidden = barBorderOff,
+          get = barColorGet("borderColor", BAR_DEFAULT_BORDER),
+          set = barColorSet("borderColor") },
+    }}
+
+    -- The bar's OWN pandemic effect, independent of the icon's on the Icon
+    -- Effects tab: same defaults, separate setting.
+    bar[#bar + 1] = { title = "Pandemic Effect", preset = "form", hidden = barOff, fields = {
+        { control = "switch", labelSide = "after", label = "Pandemic Effect",
+          desc = "Recolor the bar when the aura reaches its pandemic window "
+              .. "(<30% duration). Only applies to auras that have a pandemic "
+              .. "refresh window (HoTs and DoTs).",
+          id = "sbBarPandemicEffect", default = false, disabled = "combat",
+          get = function() return barField("pandemic") == true end,
+          set = barSet("pandemic") },
+        { control = "color", label = "Pandemic Color", alpha = true,
+          id = "sbBarPandemicColor", disabled = "combat",
+          hidden = function() return barField("pandemic") ~= true end,
+          get = barColorGet("pandemicColor", IE_DEFAULT_PANDEMIC),
+          set = barColorSet("pandemicColor") },
+        -- Review item B1: off (the default) tints only the filled part of
+        -- the bar; on tints the whole bar, background included. Per entry
+        -- and per Layout, like every bar field (barField / barSet).
+        { control = "switch", labelSide = "after", label = "Apply to Background",
+          desc = "When enabled, the pandemic color covers the whole bar, "
+              .. "background included. When disabled, it covers only the "
+              .. "filled part of the bar.",
+          id = "sbBarPandemicBackground", default = false, disabled = "combat",
+          hidden = function() return barField("pandemic") ~= true end,
+          get = function() return barField("pandemicBackground") == true end,
+          set = barSet("pandemicBackground") },
+    }}
+
+    -- ══════════════════════════════════════════════════════════
     -- FRAME EFFECTS
     -- ══════════════════════════════════════════════════════════
     -- What the unit FRAME does while this buff is on the unit: a health
@@ -1297,6 +1950,39 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         local d = s and s.gradientDir
         return d == "leftToRight" or d == "rightToLeft"
     end
+
+    -- Display-tab redesign: SHOW FRAME EFFECTS, per entry, default OFF, the
+    -- header gate of the Display tab's last card (no fields). Off, none of
+    -- this entry's frame effects render (the render side reads the three
+    -- families only while it is on, customized or not) and this tab goes.
+    -- Stored only when ON (specSpellFrameFxOn["sb"][sid] = true); migration
+    -- 81 turned it on for every entry whose effects rendered before.
+    local function frameFxOn()
+        local p = SROOT()
+        local t = p.specSpellFrameFxOn and p.specSpellFrameFxOn[kSpec]
+        return (t and t[sid]) == true
+    end
+    local showFrameFxCard = { title = "Show Frame Effects", preset = "form",
+      toggle = {
+          id = "sbShowFrameEffects", default = false, disabled = "combat",
+          tooltip = "Show Frame Effects",
+          desc = "Let this buff change the unit frame while it is active: "
+              .. "health bar color, frame border and overlay, configured on "
+              .. "the Frame Effects tab.",
+          get = frameFxOn,
+          set = function(_, ctx, val)
+              if InCombatLockdown() then return end
+              setEntryFlag("specSpellFrameFxOn", val)
+              local bf = BF()
+              if bf and bf.InvalidateSpellColorCache then bf:InvalidateSpellColorCache() end
+              Rebuild()
+              PreviewSoon()
+              -- Whether the Frame Effects tab EXISTS follows this flag.
+              if ctx and ctx.app then ctx.app:Invalidate("singleBuffs") end
+              Repaint(ctx)
+          end,
+      },
+      fields = {} }
 
     local frameEffects = {}
 
@@ -1344,7 +2030,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
               end
               Rebuild()
           end },
-        { control = "switch", labelSide = "after", label = "Prioritise Over Debuff Recolor",
+        { control = "switch", labelSide = "after", label = "Prioritize Over Debuff Recolor",
           desc = "When both this buff health color and the dispel health color "
               .. "would show, this buff color renders above the dispel recolor.",
           id = "sbColorPriority", default = false, disabled = "combat", hidden = colorOff,
@@ -1418,7 +2104,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
                   end)
               end
           end },
-        { control = "switch", labelSide = "after", label = "Prioritise Over Debuff Border",
+        { control = "switch", labelSide = "after", label = "Prioritize Over Debuff Border",
           desc = "When both buff and debuff borders would show, this buff border "
               .. "takes priority and hides the debuff border.",
           id = "sbBuffBorderPriority", default = false, disabled = "combat", hidden = borderOff,
@@ -1477,7 +2163,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
               end
               Rebuild()
           end },
-        { control = "dropdown", label = "Overlay Style",
+        { control = "segmented", label = "Overlay Style",
           desc = "Solid fills the overlay evenly in the chosen color. Gradient "
               .. "fades it out along the Gradient Direction.",
           options = { { value = "solid",    text = "Solid" },
@@ -1594,7 +2280,7 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
               if s then s.fillOnly = val end
               Rebuild()
           end },
-        { control = "switch", labelSide = "after", label = "Prioritise Over Debuff Overlay",
+        { control = "switch", labelSide = "after", label = "Prioritize Over Debuff Overlay",
           desc = "When both buff and debuff overlays would show, this buff "
               .. "overlay takes priority and hides the debuff overlay.",
           id = "sbBuffOverlayPriority", default = false, disabled = "combat", hidden = overlayOff,
@@ -1614,8 +2300,73 @@ function BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
         icon         = icon,
         iconEffects  = iconEffects,
         cooldownText = cooldownText,
+        bar          = bar,
         frameEffects = frameEffects,
+        -- Not groups: what the Buff List needs to gate and place the two
+        -- cards it builds itself (Icon Size, Text Area Size) -- they are
+        -- container fields, but they follow this entry's Show Icon and
+        -- Show Text in place of Icon.
+        iconHidden      = iconOff,
+        textAreaHidden  = textAreaHidden,
+        -- Display-tab redesign: the pieces of the Display tab that live on
+        -- this entry's visual store, for the Buff List to place (it owns the
+        -- tab and the container-field cards around them).
+        textInPlaceOn         = textInPlaceOn,
+        iconNothingDrawn      = cdtCollapsed,
+        showIconToggle        = showIconToggle,
+        showCooldownTextField = showCooldownTextField,
+        showCooldownTextNote  = showCooldownTextNote,
+        textInPlaceToggle     = textInPlaceToggle,
+        showBarCard           = showBarCard,
+        showFrameFxCard       = showFrameFxCard,
     }
+end
+
+-- TRUE while the entry's Show Icon is off. Read from the RECORD, like
+-- SingleBuffSquareColorByDuration below and for the same reason: the Buff
+-- List asks it when it mints the entry's tab routes (Icon Effects goes,
+-- Cooldown Text stays), before any page exists.
+function BuzzardFramesOptions.SingleBuffIconHidden(c, sid)
+    local root = type(c) == "table" and c.sbVisuals
+    if not (root and sid) then return false end
+    local t = root.specSpellIconHidden and root.specSpellIconHidden[SB_KSPEC]
+    return (t and t[sid]) == true
+end
+
+-- Display-tab redesign: the other record reads the Buff List's tab gates make
+-- when it mints the routes (before any page exists), same shape as above.
+local function RecordFlag(c, family, sid)
+    local root = type(c) == "table" and c.sbVisuals
+    if not (root and sid) then return false end
+    local t = root[family] and root[family][SB_KSPEC]
+    return (t and t[sid]) == true
+end
+function BuzzardFramesOptions.SingleBuffTextInPlace(c, sid)
+    return RecordFlag(c, "specSpellTextInPlace", sid)
+end
+function BuzzardFramesOptions.SingleBuffCooldownTextOff(c, sid)
+    return RecordFlag(c, "specSpellCooldownTextOff", sid)
+end
+function BuzzardFramesOptions.SingleBuffFrameFxOn(c, sid)
+    return RecordFlag(c, "specSpellFrameFxOn", sid)
+end
+-- Show Bar on for ANY Layout: the entry's own flag (every Layout without a
+-- tier inherits it), or, with per-Layout config on, any tier's. The Bar tab
+-- is a route and cannot follow the in-page editing Layout, so it exists
+-- while the bar shows anywhere; its cards still hide per editing Layout.
+function BuzzardFramesOptions.SingleBuffBarAnyOn(c, sid)
+    local root = type(c) == "table" and c.sbVisuals
+    if not (root and sid) then return false end
+    local t = root.specSpellBar and root.specSpellBar[SB_KSPEC]
+    local e = t and t[sid]
+    if type(e) ~= "table" then return false end
+    if e.showBar == true then return true end
+    if e.separateGroupConfig and type(e.groupSettings) == "table" then
+        for _, gs in pairs(e.groupSettings) do
+            if type(gs) == "table" and gs.showBar == true then return true end
+        end
+    end
+    return false
 end
 
 -- TRUE while the entry is a Square colored by remaining time: the duration

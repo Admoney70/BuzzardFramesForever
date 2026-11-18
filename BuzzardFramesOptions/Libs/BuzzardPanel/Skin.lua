@@ -443,12 +443,19 @@ end
 -- fallback -- so the result is checked and the born face put back if the
 -- file is not there. pcall as well: a malformed path throws rather than
 -- returning false.
+--
+-- A string with `bpFixedSize` (ns.SetFixedFontSize) is always set at that
+-- size and never at whatever GetFont reports: on a fresh login GetFont can
+-- answer with nothing while the face is still loading, and a size read
+-- back from it then is no size at all.
 local function ApplyFace(fs)
     if not fs then return end
     RememberFace(fs)
-    local face, size, flags = fs:GetFont()
+    local face, cur, flags = fs:GetFont()
+    local size = fs.bpFixedSize or cur
+    flags = flags or fs.bpFixedFlags or ""
     local want = panelFace or fs.bpBornFace
-    if not (want and size) or want == face then return end
+    if not (want and size) or (want == face and size == cur) then return end
     local ok, set = pcall(fs.SetFont, fs, want, size, flags)
     if not (ok and set ~= false) and fs.bpBornFace then
         pcall(fs.SetFont, fs, fs.bpBornFace, size, flags)
@@ -542,24 +549,37 @@ end
 -- width: the strip and footer buttons are sized to their captions at
 -- render, and wrapped notes to their line count, so re-pointing alone
 -- left a wider face poking out of last render's buttons.
--- The first SetFont on a font file the client has not loaded yet fails and
--- the string draws blank; that failed call is what starts the load, and the
--- file then stays loaded until the client exits -- so it shows up only on a
--- fresh login, never after a reload. A throwaway string takes that first
--- call here, when the face is named (NewApp, at the host's load), so the
--- file is in before any real string is drawn in it. Without this the rail's
--- first row came up blank and the close button's X, which is enlarged once
--- off its own GetFont at birth, stayed small for the session.
-local fontPrimer
+-- On a fresh login the panel's face is not loaded yet, and the first
+-- strings drawn in it come up wrong for the session: the rail's first row
+-- blank, the close button's X small. A reload never shows it, because the
+-- client keeps a font file loaded until it exits.
+--
+-- The face is therefore held by a FONT OBJECT, made when the face is named
+-- (NewApp, at the host's load) and kept for the session -- the way font
+-- files are loaded through CreateFont rather than through a loose string.
+-- This replaced a hidden FontString primer (MINOR 109 and earlier) that
+-- did not stop it: owner report 2026-11-06, Colors row blank and the X
+-- small after a fresh login.
 local primedFaces = {}
+local primerCount = 0
 local function PrimeFace(path)
     if not path or primedFaces[path] then return end
-    primedFaces[path] = true
-    if not fontPrimer then
-        fontPrimer = UIParent:CreateFontString(nil, "BACKGROUND")
-        fontPrimer:Hide()
-    end
-    pcall(fontPrimer.SetFont, fontPrimer, path, 12, "")
+    primerCount = primerCount + 1
+    local name = "BuzzardPanelFace" .. primerCount
+    local obj = _G[name] or CreateFont(name)
+    primedFaces[path] = obj
+    pcall(obj.SetFont, obj, path, 12, "")
+end
+
+-- A string pinned to one size whatever its font reports -- for a string
+-- whose size is not its template's (the close button's X). Stored on the
+-- string, so every later face change re-applies the same size.
+function ns.SetFixedFontSize(fs, size, flags)
+    if not (fs and size) then return end
+    fs.bpFixedSize  = size
+    fs.bpFixedFlags = flags
+    TrackFont(fs)     -- so a later face change re-applies the size
+    ApplyFace(fs)
 end
 
 function ns.SetPanelFont(app, path)

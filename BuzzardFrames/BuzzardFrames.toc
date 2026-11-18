@@ -1,8 +1,9 @@
-## Interface: 120100
+## Interface: 120105, 16001
+## AllowLoadGameType: standard, camelot
 ## Title: |cff11ace9Buzzard Frames|r
 ## Notes: Blizzard-style Party, Raid and Unit Frames
 ## Author: Serina
-## Version: 5.3.2
+## Version: 5.4.3
 ## SavedVariables: BuzzardFramesDB, BuzzardFramesUnitFramesDB, BuzzardFramesAuraCustomizationsDB, BuzzardFramesCustomFrameGroupsDB, BuzzardFramesRaidPartyFramesDB, BuzzardFramesIncomingCastsDB, BuzzardFramesMenuModeDB
 ## X-oUF: BuzzardFrames_oUF
 ## X-Curse-Project-ID: 1461828
@@ -52,6 +53,10 @@ AuraCustomizations\Defaults_AuraCustomizations.lua
 CustomFrameGroups\Defaults_CustomFrameGroups.lua
 IncomingCasts\Defaults_IncomingCasts.lua
 Core.lua
+Forever\Forever_Class.lua
+Forever\Forever_Names.lua
+Forever\Forever_SpellData.lua
+Forever\Forever_Dispel.lua
 # P-1 chokepoint: the ONLY file that talks to the options panel
 # implementation. Must load after Core.lua (needs the BF object) and
 # before anything that calls BF:RefreshPanel / BF:IsOptionsShown /
@@ -75,6 +80,9 @@ Core_Refresh.lua
 Core_UI.lua
 Core_ChatCommands.lua
 ProfileExport.lua
+Forever\Forever_ClassOverrides.lua
+Forever\Forever_ImportFilter.lua
+Forever\Forever_Preview.lua
 # One-time account-wide notifications. Must be after Core_DB, which
 # captures BF._freshInstall that the new-user suppression depends on.
 Core_Notifications.lua
@@ -83,6 +91,7 @@ Core_Notifications.lua
 # SpellData_Buffs.lua builds ns.SpellData; SpellSuggest.lua exposes the
 # same rows as a plain function on the addon table for the options addon,
 # which cannot see this addon's private table. Data file first.
+Forever\Forever_SpellData_Buffs.lua
 SpellSearch\SpellData_Buffs.lua
 SpellSearch\SpellSuggest.lua
 
@@ -163,6 +172,7 @@ Themes.lua
 # Single-buff / curated-spell helpers shared by the runtime and the options
 # panel. Reads BF.SPEC_SPELLS at file scope, so AFTER TrackedAuras.lua.
 AuraCustomizations\SingleBuffAPI.lua
+Forever\Forever_BuffList.lua
 CustomFrameGroups\CustomFrames.lua
 Auras\PrivateAuraDispelOverlay.lua
 Range.lua

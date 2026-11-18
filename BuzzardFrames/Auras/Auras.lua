@@ -688,8 +688,23 @@ function BF:RefreshBuffsOnly()
     self:UpdateAuraSizeCache()
     self:ApplyStackTextStyle()
     if self.InvalidateContainerIconCaches then self:InvalidateContainerIconCaches() end
+    -- Duration Bar Stage 2 follow-up: this is the Buffs sub-category refresh
+    -- (Aura Text > Buffs and the Buffs section), i.e. where the BASELINE
+    -- cooldown-text fields change -- showBuffDuration, buffAutoScale, the
+    -- font / swipe / spark fields. A single-buff entry that overrides Cooldown
+    -- Text but leaves a field unset inherits it from that baseline, and
+    -- ResolveSpellCooldownText caches the inherited value. Clear it with the
+    -- same call the entry's own Cooldown Text setters use, so the new value
+    -- lands on THIS refresh (it also decides whether a text-in-place entry
+    -- draws anything -- BF.GetSingleBuffIconMode). Option-edit path only (it
+    -- returns in combat above); lazily rebuilt by the Layout below.
+    if self.InvalidateContainerSettingsCache then self.InvalidateContainerSettingsCache() end
 
     local primary    = self:GetIndicatorByName("buffsAndContainers")
+    -- Big Defensive's line budget follows the sizes of single buffs anchored
+    -- to it (an entry inheriting the Buffs Icon Size moves with it), and only
+    -- BigDefIcons:Layout applies that geometry -- see the per-frame gate below.
+    local bigDefPrimary = self:GetIndicatorByName("bigDefIcons")
     for _, frame in next, self.registeredFrames do
         if frame and not frame._isPreviewFrame then
             self:ApplyAuraGeometry(frame)
@@ -701,6 +716,13 @@ function BF:RefreshBuffsOnly()
             end
             if primary then
                 primary:Layout(frame)
+                -- After the buffs Layout (it re-derives the single-buff size
+                -- memo the gate and the slack read). Only for a frame whose
+                -- Big Defensive container hosts single buffs.
+                if bigDefPrimary and BF.BigDefHostNeedsRelayout
+                   and BF.BigDefHostNeedsRelayout(frame) then
+                    bigDefPrimary:Layout(frame)
+                end
                 if frame.unit then primary:Update(frame, frame.unit) end
             end
         end
@@ -822,7 +844,7 @@ end
 
 -- aurasAbovePowerBar (healthPower section). The toggle is read by
 -- the aura indicators to decide whether icons anchor to the unit frame or
--- to frame.healthBar.clipFrame (lifting them above the power bar):
+-- to frame.container (lifting them above the power bar):
 -- buffsAndContainers, debuffIcons, bigDefIcons. For default-buff and container
 -- groups the lift decision is preprocessed into groupConfig.canLiftAboveBar
 -- (AuraGroupHelpers.lua) so the pool needs invalidating too.
@@ -1006,7 +1028,7 @@ end
 -- ============================================================
 -- INVALIDATE AURA POSITION CACHES FOR ONE FRAME
 -- Called when the power bar shows/hides, which changes whether
--- aura icons anchor to frame or healthBar.clipFrame (when
+-- aura icons anchor to frame or frame.container (when
 -- aurasAbovePowerBar is enabled). Clears SF_LastIndex on all
 -- icon types so indicators re-anchor them on the next pass.
 -- ============================================================

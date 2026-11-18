@@ -81,6 +81,7 @@ BF.CLASS_SORT_ORDER_ALPHA = {
     "MAGE", "MONK", "PALADIN", "PRIEST", "ROGUE",
     "SHAMAN", "WARLOCK", "WARRIOR",
 }
+if BF.isForever then BF.Forever.ApplyCustomFrameClassLists(ROLE_CLASSES) end -- [FOREVER] 9-class list + all classes per role
 
 -- ============================================================
 -- DATA HELPERS

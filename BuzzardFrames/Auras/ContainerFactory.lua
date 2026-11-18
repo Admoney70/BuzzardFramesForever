@@ -62,12 +62,51 @@ local UnitIsVisible = UnitIsVisible
 -- (SyncAuraGridContainer / RefreshAuraContainerVisibilityForUnit) fold the
 -- flag so the change-guarded gate can't re-raise the alpha early.
 -- Steady-state containers in vehicles are untouched — they display fine.
+
+-- Duration Bar Stage 5 (owner ruling 2026-10-13): the frame's EMPTY-BAR art
+-- (parent._bf_sbEmpty[ci], BuffsAndContainers.lua MaintainSingleBuffEmptyBar)
+-- belongs with the sbb<ci> slots, so it takes their HOST's visibility alpha,
+-- written on the same edges by the same writers: every place below that
+-- changes a slot host's alpha calls this with the alpha it just wrote. The
+-- shared host (c._bf_sharedSlots) carries every sbb slot of the frame, so it
+-- drives every holder; a private fallback host keyed "sbb<ci>" drives that
+-- index only. Per-holder change guard; nothing per aura, no new events.
+-- (A holder created later adopts the host's current alpha in
+-- MaintainSingleBuffEmptyBar via BF.SlotHostVisAlpha.)
+local function SyncEmptyBarAlpha(c, a)
+    local frame = c._bf_frame
+    local ea = frame and frame._bf_sbEmpty
+    if not ea then return end
+    local only
+    if not c._bf_sharedSlots then
+        only = tonumber(tostring(c._bf_featureKey or ""):match("^sbb(%d+)$"))
+        if not only then return end
+    end
+    for ci, r in pairs(ea) do
+        if (not only or ci == only) and r._bf_visAlpha ~= a then
+            r._bf_visAlpha = a
+            r.holder:SetAlpha(a)
+        end
+    end
+end
+
+-- The visibility alpha currently in force on the host of `slotKey` (the
+-- slot's own container, else the frame's shared host), or nil before any
+-- gate has written one.
+function BF.SlotHostVisAlpha(frame, slotKey)
+    local s = frame and frame._bf_auraSlots and frame._bf_auraSlots[slotKey]
+    local c = (s and s.c) or (frame and frame._bf_auraContainers
+        and frame._bf_auraContainers.slots)
+    return c and c._bf_visAlpha
+end
+
 local function MarkVehicleTainted(c)
     if BF.PlayerInVehicle and BF.PlayerInVehicle() then
         c._bf_vehicleTainted = true
         c._bf_visAlpha = 0
         c:SetAlpha(0)
         BF._bf_anyVehicleTainted = true
+        if c._bf_isSlotVisual then SyncEmptyBarAlpha(c, 0) end
     end
 end
 
@@ -97,7 +136,7 @@ end
 --      because the only code that writes it is change-guarded on a field
 --      that already says 0.
 --
--- The result was a container that is shown, correctly levelled, correctly
+-- The result was a container that is shown, correctly leveled, correctly
 -- parented, bound to the right unit, with correct filters and candidate sets,
 -- with the engine happily assigning auras to its slots -- and invisible.
 -- Every per-slot diagnostic reported it healthy, because every field they
@@ -328,6 +367,8 @@ local function ApplyContainerVisAlpha(c, unit, shown)
     if c._bf_visAlpha ~= a then
         c._bf_visAlpha = a
         c:SetAlpha(a)
+        -- Stage 5: a slot host's empty-bar art follows, on the same edge.
+        if c._bf_isSlotVisual then SyncEmptyBarAlpha(c, a) end
     end
     return a
 end
@@ -355,6 +396,8 @@ function BF:MarkAllContainersVehicleTainted()
                     c._bf_visAlpha = 0
                     pcall(c.SetAlpha, c, 0)
                     BF._bf_anyVehicleTainted = true
+                    -- Stage 5: the slot host's empty-bar art goes with it.
+                    if c._bf_isSlotVisual then SyncEmptyBarAlpha(c, 0) end
                 end
             end
         end
@@ -925,6 +968,10 @@ GROW_MAP.RIGHT = GROW_MAP.RIGHT_DOWN
 GROW_MAP.LEFT  = GROW_MAP.LEFT_DOWN
 GROW_MAP.DOWN  = GROW_MAP.DOWN_RIGHT
 GROW_MAP.UP    = GROW_MAP.UP_RIGHT
+-- Read-only export for the options preview's flow (DummyAuras.lua
+-- _pvHostFlow), so the preview resolves a grow direction exactly as
+-- ApplyAuraGridGeometry does -- aliases included. Nothing writes it.
+BF.AuraGridGrowMap = GROW_MAP
 
 -- Tooltip position mode → AuraButton tooltip anchor token.
 -- "frame"/"default" have no button-relative expression (documented
@@ -1054,6 +1101,7 @@ local function ApplyBorderMode(button, spec)
             end
             b:Show()
             button:ClearDispelTypeTextures()
+            button._bf_dtiBound = nil  -- the Clear dropped the corner icon too
             button:AddDispelTypeTexture(b, {
                 style = Enum.CustomAuraButtonDispelTypeTextureStyle
                     and Enum.CustomAuraButtonDispelTypeTextureStyle.Border or 0,
@@ -1107,6 +1155,7 @@ local function ApplyBorderMode(button, spec)
             -- (later in the walk, now that the mode flag is flat-family)
             -- re-binds the separate dispel set.
             button:ClearDispelTypeTextures()
+            button._bf_dtiBound = nil  -- the Clear dropped the corner icon too
         end
         button._bf_blizzMode = nil
     end
@@ -1441,6 +1490,7 @@ local function ApplyDispelBorderBinding(button, spec)
     }
     local ring = button._bf_dispelRing
     button:ClearDispelTypeTextures()
+    button._bf_dtiBound = nil  -- the Clear dropped the corner icon too
     -- v95 (c) "COLOR BORDER BY DISPEL TYPE" = OFF NOW ACTUALLY TURNS IT OFF.
     -- This flag used to be read in exactly ONE place (the colorFull widening a
     -- few lines down), so switching it off left the dispel edges/ring BOUND and
@@ -1567,19 +1617,41 @@ end
 -- init-time binding in InitAuraButton). Runs in the restyle walk so the
 -- toggle and the size % update without a button rebuild. The texture is
 -- created lazily here too, because a button built while the toggle was OFF
--- has no _bf_dispelTypeIcon yet. Binding is idempotent for the engine (we
--- re-bind on create). Zero per-frame cost — this only runs on a settings
--- change (sig-guarded restyle walk).
+-- has no _bf_dispelTypeIcon yet. Zero per-frame cost — this only runs on a
+-- settings change (sig-guarded restyle walk).
+--
+-- 2026-10-11: BOUND-ONCE, tracked by button._bf_dtiBound. Binding is NOT
+-- idempotent: the engine keeps one display entry per AddDispelTypeTexture
+-- call, and 12.1.5 asserts ("Display element ... has already been added") on
+-- a second add of the same texture. The old code re-added on every walk,
+-- trusting ApplyDispelBorderBinding's ClearDispelTypeTextures to have run
+-- first -- but that function returns BEFORE its Clear in Blizzard border mode,
+-- for non-dispel-border specs and for buttons without dispel edges. On 12.1.0
+-- each such walk stacked another entry for the same texture (all processed on
+-- every aura update); on 12.1.5 the assert would abort the pcall'd walk right
+-- here, so cooldown, duration, stack, tooltip, glow and icon-effect styling
+-- never landed. Every ClearDispelTypeTextures on an aura button resets the
+-- flag (ApplyBorderMode x2, ApplyDispelBorderBinding).
 local function ApplyDispelTypeIcon(button, spec)
     local dti = button._bf_dispelTypeIcon
     if not spec.dispelTypeIcon then
         -- ApplyDispelBorderBinding (which runs BEFORE this in the restyle walk)
         -- already called ClearDispelTypeTextures, dropping every binding on the
         -- button INCLUDING this icon's, then re-added only the border. So when
-        -- the icon is off we do nothing but hide the texture — its binding is
-        -- already gone. (Non-dispel-border specs never Clear, but those never
-        -- had the icon bound either, so hiding is enough.)
-        if dti then dti:Hide() end
+        -- the icon is off we normally only hide the texture — its binding is
+        -- already gone. But when no Clear ran this walk (Blizzard border mode,
+        -- or a spec without dispelBorder) the binding SURVIVED, and the engine
+        -- owns a bound texture's Shown state, so a plain Hide would be undone
+        -- on the next aura update. Remove it first. RemoveDispelTypeTexture
+        -- takes the REGION on 12.1.5 (it took an index on 12.1.0, where this
+        -- call is a silent no-op -- the pre-fix behavior).
+        if dti then
+            if button._bf_dtiBound and button.RemoveDispelTypeTexture
+               and pcall(button.RemoveDispelTypeTexture, button, dti) then
+                button._bf_dtiBound = nil
+            end
+            dti:Hide()
+        end
         return
     end
     if not dti then
@@ -1626,18 +1698,19 @@ local function ApplyDispelTypeIcon(button, spec)
     dti:ClearAllPoints()
     dti:SetPoint("CENTER", button, "TOPRIGHT", -nudge, -nudge)
     dti:Show()
-    -- Always (re)bind: the ClearDispelTypeTextures in ApplyDispelBorderBinding
-    -- earlier in this same walk wiped every binding on the button, so a bound
-    -- icon needs re-adding each restyle. AddDispelTypeTexture on an unbound
-    -- texture is the same call the border uses; harmless if the Clear didn't
-    -- run (dispel-border specs always Clear, and only they reach here with the
-    -- icon on).
-    button:AddDispelTypeTexture(dti, {
-        style = Enum.CustomAuraButtonDispelTypeTextureStyle
-            and Enum.CustomAuraButtonDispelTypeTextureStyle.Icon or 1,
-        showWhenHarmful = true,
-        showWhenHelpful = false,
-    })
+    -- Bind only when not already bound (see the header note). A Clear earlier
+    -- in this walk resets _bf_dtiBound, so the icon is re-added exactly when
+    -- its binding was actually dropped. The flag is set AFTER the call, so an
+    -- add that throws leaves it unset and the next walk retries.
+    if not button._bf_dtiBound then
+        button:AddDispelTypeTexture(dti, {
+            style = Enum.CustomAuraButtonDispelTypeTextureStyle
+                and Enum.CustomAuraButtonDispelTypeTextureStyle.Icon or 1,
+            showWhenHarmful = true,
+            showWhenHelpful = false,
+        })
+        button._bf_dtiBound = true
+    end
 end
 
 local function ApplyCooldownStyle(button, spec)
@@ -2470,6 +2543,7 @@ function BF.HBSlotKey(featureKey)
     local k = tostring(featureKey or "?")
     if k:match("^fx%d+$") then return "fx*" end
     if k:match("^sbc%d+$") then return "sbc*" end
+    if k:match("^sbb%d+$") then return "sbb*" end
     return k
 end
 
@@ -2530,6 +2604,65 @@ local function HBCountGroup(hbKey)
     if row then row.groups = row.groups + 1 end
 end
 
+-- ── Duration Bar plan §5.6 (Stage 4): A FLOW-HOSTED BAR'S LAYOUT CELL ──────
+-- elementWidth/Height for a bar group, by the host's fill axis (GROW_MAP axis:
+-- 0 = the host fills rows, 1 = it fills columns). The full-line trick applies
+-- when the bar's LONG side matches the fill axis:
+--   horizontal bar, row host    -> (lineSize, barH): the bar takes a whole
+--                                  line while its buff is up, so everything
+--                                  after it in the flow wraps (dynamic lift)
+--   vertical bar, column host   -> (barW, lineSize): a whole column, so the
+--                                  icons after it are pushed sideways
+--   otherwise                   -> (barW, barH): a normal element
+-- `lineSize` is the host's FINAL wrap budget as ApplyAuraGridGeometry pushed
+-- it (base + the slack from ICON entries + the pixel of tolerance). A bar is
+-- never part of that budget, so its cell is derived from it and never fed
+-- back into it. The cell only SPACES the flow (plan §4.3): the button keeps
+-- the bar's own size, and the engine anchors it at the flow anchor point, so
+-- the bar art sits on the host's anchor side of a full-line cell. Third
+-- return: true for the two full-line cases. Pure -- exported for the options
+-- preview, which applies the same rule to its rows.
+local function SpellBarFlowCell(bs, axis, lineSize)
+    local w, h = bs and bs.w, bs and bs.h
+    if not (w and h) then return nil end
+    if lineSize then
+        if bs.orientation == "VERTICAL" then
+            if axis == 1 then return w, lineSize, true end
+        elseif axis == 0 then
+            return lineSize, h, true
+        end
+    end
+    return w, h, false
+end
+BF.SpellBarFlowCell = SpellBarFlowCell
+
+-- The cell for one bar GROUP of container `c`, from the line budget and axis
+-- the geometry pass last pushed (c._bf_lineSize / c._bf_flowAxis). nil for an
+-- icon group, or while the bar's size is unknown.
+local function BarGroupCell(c, spec)
+    local bs = spec and spec._bf_bar
+    if not bs then return nil end
+    return SpellBarFlowCell(bs, c._bf_flowAxis, c._bf_lineSize)
+end
+
+-- Out-of-band layout push for a bar group (a reorder, a size or direction
+-- change) -- the bar twin of the icon pushes in EnsureAuraGridSpellGroup /
+-- ApplyAuraGridGroupSize: the full table (tables replace, not merge), and the
+-- geometry pass's signature for the group dropped so its next run re-asserts.
+local function PushBarGroupLayout(c, groupKey, spec)
+    local lg = c._bf_lastGeo
+    local layout = {
+        elementSpacing = (lg and lg.spacing) or 1,
+        lineSpacing    = (lg and lg.rowSpacing) or 1,
+    }
+    local li = c._bf_groupLayoutIndex and c._bf_groupLayoutIndex[groupKey]
+    if li then layout.layoutIndex = li end
+    local cw, ch = BarGroupCell(c, spec)
+    if cw then layout.elementWidth, layout.elementHeight = cw, ch end
+    if c._bf_curLayoutSig then c._bf_curLayoutSig[groupKey] = nil end
+    pcall(c.SetAuraGroupLayout, c, groupKey, layout)
+end
+
 local function MakeInitFn(spec, maxN, hbKey)
     local skip = POOL_BATCH - (maxN or POOL_BATCH)
     -- v85: unconditional (the /bf auraskip gate is gone -- see the block above).
@@ -2545,7 +2678,19 @@ local function MakeInitFn(spec, maxN, hbKey)
             return
         end
         if row then row.styled = row.styled + 1 end
-        InitAuraButton(button, spec)
+        -- Stage 4: a BAR group's spec carries the resolved bar spec. Its
+        -- button IS the bar -- regions, the SetDurationBar binding and the
+        -- bar's own size (barW x barH, never clamped) are built here, inside
+        -- the init window, exactly as for the self-positioned sbb slot. Read
+        -- at init time, not captured: the restyle commit updates the spec
+        -- table in place.
+        local bs = spec._bf_bar
+        if bs then
+            BF.InitSpellBarButton(button, bs)
+            if bs.w and bs.h then pcall(button.SetSize, button, bs.w, bs.h) end
+        else
+            InitAuraButton(button, spec)
+        end
     end
 end
 
@@ -2626,6 +2771,11 @@ TopUpGroupStyling = function(c, gk)
     if BF:IsAuraCreationRestricted() then return false end
     local spec = (c._bf_groupSpecs and c._bf_groupSpecs[gk]) or c._bf_buttonSpec
     if not spec then return false end
+    -- Stage 4: never style a BAR group's button as an icon. Unreachable by
+    -- construction -- a bar group's cap is pinned at 1 (_bf_groupOwnMax), the
+    -- count it was styled at -- and a bar can only be built in the init window
+    -- anyway, so there is nothing to top up: report done without a write.
+    if spec._bf_bar then return true end
     local okN, n = pcall(c.GetAuraGroupFrameCount, c, gk)
     if not okN or not n or n == 0 then return false end
     for i = 1, n do
@@ -2675,7 +2825,7 @@ end
 -- customization fields (solidIcon, iconEffect, glow*, pandemic*, stack
 -- styling) that never bumped _cacheGen at all, so a gen-based guard would
 -- silently swallow per-spell style edits. (v99 then removed that pre-guard from
--- the container path too, for the same reason generalised -- see the note in
+-- the container path too, for the same reason generalized -- see the note in
 -- ApplyAuraGridButtonSpec.) The full field comparison is the only authority on
 -- both paths now; it is just no longer built out of ~36
 -- tostring calls, ~25 concats, a 43-element table and a table.concat on every
@@ -2694,6 +2844,11 @@ local BUTTON_SPEC_SCALARS = {
     "dispelTypeIcon", "dispelTypeIconScale",
     "disableSwipe", "disableSpark", "reverseSwipe",
     "tooltipEnabled", "tooltipInCombat",
+    -- Duration Bar plan §5.1-5.2: a single-buff entry with Show Icon OFF
+    -- (DeriveSpellButtonSpec). Its look rides fields already in this census
+    -- (an alpha-0 solidIcon, flat border at thickness 0, swipe/spark off);
+    -- the marker makes the mode switch itself always move the signature.
+    "iconHidden",
     -- v71: per-group size multiplier (preset Relative Size) -- folded in so a
     -- ratio change re-runs the restyle walk (which re-stores the spec's
     -- _bf_sizeMult; the geometry re-layout then reads the new value).
@@ -2844,7 +2999,9 @@ local function GroupInitComplete(c, groupKey)
     local n = c:GetAuraGroupFrameCount(groupKey) or 0
     for i = 1, n do
         local b = c:GetAuraGroupFrame(groupKey, i)
-        if b and b._bf_icon and not b._bf_initDone then return false end
+        -- A bar button (Stage 4) stamps _bf_barRegions mid-walk instead of
+        -- _bf_icon; the completion marker is the same _bf_initDone.
+        if b and (b._bf_icon or b._bf_barRegions) and not b._bf_initDone then return false end
     end
     return true
 end
@@ -2858,9 +3015,12 @@ end
 --         sortDirection, filter }               -- single-group form, OR
 --       { buttonSpec, ..., groups = { {key, filter, maxFrameCount?,
 --         sortMethod?, sortDirection?}, ... } } -- multi-group form.
--- Multi-group: groups sharing one container are auto-deduped by the
--- engine (same aura never assigned twice within a container), and can be
--- made disjoint outright with !-negated filters.
+-- Multi-group: groups sharing one container do NOT dedup -- each group
+-- includes a matching aura independently (12.1.0 / 12.1.5
+-- UpdateAuraInGroups; PTR-confirmed, see the note at the slot visuals
+-- below), so one aura matched by two groups renders twice. Keep groups
+-- disjoint with !-negated filters or excludeSpellIDs candidates where a
+-- duplicate is not wanted.
 function BF:EnsureAuraGridContainer(frame, featureKey, spec)
     frame._bf_auraContainers = frame._bf_auraContainers or {}
     local c = frame._bf_auraContainers[featureKey]
@@ -3031,7 +3191,12 @@ function BF:EnsureAuraGridSpellGroup(frame, featureKey, groupKey, g)
         -- input is recoverable -- c._bf_lastGeo is retained by the geometry
         -- pass for exactly this kind of out-of-band re-push, and the cell size
         -- comes from the group's own spec multiplier.
-        if g.layoutIndex and c._bf_groupLayoutIndex[groupKey] ~= g.layoutIndex then
+        if g.layoutIndex and c._bf_groupLayoutIndex[groupKey] ~= g.layoutIndex
+           and c._bf_groupSpecs[groupKey]._bf_bar then
+            -- Stage 4: a bar group's cell is its bar cell, not a square.
+            c._bf_groupLayoutIndex[groupKey] = g.layoutIndex
+            PushBarGroupLayout(c, groupKey, c._bf_groupSpecs[groupKey])
+        elseif g.layoutIndex and c._bf_groupLayoutIndex[groupKey] ~= g.layoutIndex then
             c._bf_groupLayoutIndex[groupKey] = g.layoutIndex
             local lg = c._bf_lastGeo
             local layout = {
@@ -3063,6 +3228,7 @@ function BF:EnsureAuraGridSpellGroup(frame, featureKey, groupKey, g)
     local gMax = g.maxFrameCount or 1
     local hbKey = HBKey(featureKey, groupKey)
     HBCountGroup(hbKey)
+    local barCellW, barCellH = BarGroupCell(c, spec)
     local ok = pcall(c.AddAuraGroup, c, groupKey, g.filter, {
         maxFrameCount = gMax,
         initializeFrame = MakeInitFn(spec, gMax, hbKey),
@@ -3080,6 +3246,12 @@ function BF:EnsureAuraGridSpellGroup(frame, featureKey, groupKey, g)
             lineSpacing = g.rowSpacing or 1,
             -- groupSpacing: engine default 0 (see EnsureAuraGridContainer).
             layoutIndex = g.layoutIndex,
+            -- Stage 4: a bar group's cell from the start. The host's geometry
+            -- pass ran earlier in this Layout and recorded its line budget and
+            -- axis, so the full-line cell is right on the creating pass rather
+            -- than one Layout late. nil for every icon group (unchanged).
+            elementWidth  = barCellW,
+            elementHeight = barCellH,
         },
     })
     if not ok then return end
@@ -3293,16 +3465,20 @@ function BF:SetAuraGridGroupDormant(frame, featureKey, groupKey, dormant)
 end
 
 -- aurasAbovePowerBar lift: bottom-anchored aura grids anchor to the
--- health bar's clip frame while the power bar is shown. Mirrors the
--- legacy gate exactly (AuraGroupHelpers isBottomAnchor +
--- _bf_auraAnchorTarget = healthBar.clipFrame or healthBar). Reads live
--- IsShown (not _bf_powerBarShown — PowerBar:Update refreshes that flag
--- AFTER the aura re-anchor hook fires).
+-- health-area rect (frame.container) while the power bar is shown. Mirrors
+-- the legacy gate exactly (AuraGroupHelpers isBottomAnchor +
+-- _bf_auraAnchorTarget = container or healthBar.clipFrame or healthBar).
+-- container, NOT healthBar.clipFrame (owner 2026-10-12): the clip narrows
+-- while a reduced-max-health effect is active (AbsorbBars
+-- _UpdateReducedMaxHealth), which dragged lifted auras left with the health
+-- fill -- the reason BF:ResolveAuraAnchorFrame and _bf_auraAnchorTarget
+-- already use container. Reads live IsShown (not _bf_powerBarShown —
+-- PowerBar:Update refreshes that flag AFTER the aura re-anchor hook fires).
 function BF.AuraLiftAnchorFrame(frame, ac, anchor)
     if ac and ac.aurasAbovePowerBar
        and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
        and (anchor == "BOTTOM" or anchor == "BOTTOMLEFT" or anchor == "BOTTOMRIGHT") then
-        return frame.healthBar.clipFrame or frame.healthBar
+        return frame.container or frame.healthBar.clipFrame or frame.healthBar
     end
     return nil
 end
@@ -3352,6 +3528,12 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
         c:SetFlowLayoutAnchorPoint(anchor)
         c:SetFlowLayoutMaximumLineSize(lineSize)
     end
+    -- Stage 4: the FINAL line budget and fill axis, recorded for the bar
+    -- groups' cells (BarGroupCell) -- read by the group loop below and by the
+    -- out-of-band pushes (a reorder, a bar size edit), which run after this
+    -- pass in the same Layout. Two scalar writes; nothing reads them back into
+    -- the budget.
+    c._bf_lineSize, c._bf_flowAxis = lineSize, grow.axis
 
     -- Live icon-size (V3 path). elementWidth/Height alone was PTR-confirmed
     -- to size only the layout CELLS (buttons keep their baked size — looks
@@ -3400,7 +3582,11 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
             -- Enlarged groups (v54: enlarge*Debuffs) scale off the shared
             -- size by their spec's multiplier.
             local gSize = size * ((gkSpec and gkSpec._bf_sizeMult) or 1)
-            local n = c:GetAuraGroupFrameCount(gk) or 0
+            -- Stage 4: a BAR group is not host-size-relative -- its buttons
+            -- keep the bar's own barW x barH (ApplyAuraGridGroupButtonSpec
+            -- owns that size) -- so the square walk never touches it.
+            local n = (gkSpec and gkSpec._bf_bar) and 0
+                or (c:GetAuraGroupFrameCount(gk) or 0)
             for i = 1, n do
                 local b = c:GetAuraGroupFrame(gk, i)
                 if b and not pcall(b.SetSize, b, gSize, gSize) then
@@ -3498,10 +3684,17 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
         -- no longer holds. The v43 "layout tables may replace rather than
         -- merge" rule is unaffected — when we do push, we still push in full.
         local gkSpecL = c._bf_groupSpecs and c._bf_groupSpecs[gk]
-        local cell = sizeOK and (size * ((gkSpecL and gkSpecL._bf_sizeMult) or 1)) or nil
+        -- Stage 4: a bar group's cell comes from SpellBarFlowCell (the host
+        -- fill axis + this pass's final lineSize), never from the square size.
+        local isBar = gkSpecL and gkSpecL._bf_bar
+        local barW, barH
+        if isBar then barW, barH = BarGroupCell(c, gkSpecL) end
+        local cell = (not isBar) and sizeOK
+            and (size * ((gkSpecL and gkSpecL._bf_sizeMult) or 1)) or nil
         local li   = c._bf_groupLayoutIndex and c._bf_groupLayoutIndex[gk]
         local lsig = spacing .. "|" .. (geo.rowSpacing or 1)
                   .. "|" .. (li or -1) .. "|" .. (cell or -1)
+        if barW then lsig = lsig .. "|bar" .. barW .. "x" .. barH end
         c._bf_curLayoutSig = c._bf_curLayoutSig or {}
         if c._bf_curLayoutSig[gk] ~= lsig then
             c._bf_curLayoutSig[gk] = lsig
@@ -3515,7 +3708,10 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
             if li then
                 layout.layoutIndex = li
             end
-            if sizeOK then
+            if barW then
+                layout.elementWidth = barW
+                layout.elementHeight = barH
+            elseif sizeOK and cell then
                 -- Keep layout cells in lockstep with the (now-applied) button
                 -- size; omitted entirely when the resize was denied so cells
                 -- fall back to the buttons' natural (baked) size.
@@ -3549,7 +3745,7 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
     end
 
     -- Anchor target resolution: aurasAbovePowerBar lift when geo.canLift
-    -- (bottom anchor + power bar shown → health bar clipFrame), else an
+    -- (bottom anchor + power bar shown → frame.container), else an
     -- explicit geo.anchorFrame, else the unit frame. geo is retained on
     -- the container so ReanchorFrameAuraContainers can re-resolve the
     -- lift when the power bar shows/hides without a full Layout.
@@ -3561,6 +3757,17 @@ function BF:ApplyAuraGridGeometry(frame, featureKey, geo)
     -- (the power-bar lift hook) writes through its own path below and keeps
     -- these fields coherent, so a lift flip always re-anchors correctly.
     local ax, ay = geo.offsetX or 0, geo.offsetY or 0
+    -- Stage 5 (plan §5.6): the static push of the frame's empty bars, an
+    -- extra offset on every lift-eligible display, resolved against the SAME
+    -- target the lift picked (see BF.SingleBuffBarPushFor). Folded into the
+    -- guarded offsets, so a push change re-anchors once and nothing else does.
+    if geo.canLift and BF.SingleBuffBarPushFor then
+        local px, py = BF.SingleBuffBarPushFor(frame, anchor, target)
+        ax, ay = ax + px, ay + py
+    end
+    -- The push signature this container was anchored with, for the light
+    -- refresh gate (BF.BigDefHostNeedsRelayout).
+    c._bf_pushSig = frame._bf_sbPushSig
     if c._bf_anchorPt ~= anchor or c._bf_anchorTo ~= target
        or c._bf_anchorX ~= ax or c._bf_anchorY ~= ay then
         c._bf_anchorPt, c._bf_anchorTo, c._bf_anchorX, c._bf_anchorY
@@ -3577,27 +3784,44 @@ end
 -- corrects on the next out-of-combat Layout).
 -- v53 PHASE 3 (report R6): hoisted out of the pcall below so the guard
 -- costs no closure. Semantics unchanged.
-local function ReanchorAuraContainer(c, anchor, target, geo)
+local function ReanchorAuraContainer(c, anchor, target, ax, ay)
     -- v92: keep the ApplyAuraGridGeometry anchor guard coherent — this hook
     -- re-resolves the lift target outside that function.
     c._bf_anchorPt, c._bf_anchorTo = anchor, target
-    c._bf_anchorX, c._bf_anchorY = geo.offsetX or 0, geo.offsetY or 0
+    c._bf_anchorX, c._bf_anchorY = ax, ay
     c:ClearAllPoints()
-    c:SetPoint(anchor, target, anchor,
-        geo.offsetX or 0, geo.offsetY or 0)
+    c:SetPoint(anchor, target, anchor, ax, ay)
 end
 function BF:ReanchorFrameAuraContainers(frame)
     local t = frame and frame._bf_auraContainers
     if not t then return end
     local ac = BF:GetAuraCacheForFrame(frame)
+    -- Stage 5: a power-bar flip moves the content rect, the lift target and
+    -- the frame-relative push (its power strip term) -- re-derive the push
+    -- before re-anchoring with it.
+    if BF.InvalidateSingleBuffBarPush then BF.InvalidateSingleBuffBarPush(frame) end
     for _, c in pairs(t) do
         local geo = c._bf_lastGeo
         if geo and not c._bf_isSlotVisual then
             local anchor = (geo.anchor and geo.anchor ~= "") and geo.anchor or "CENTER"
             local target = (geo.canLift and BF.AuraLiftAnchorFrame(frame, ac, anchor))
                 or geo.anchorFrame or frame
-            pcall(ReanchorAuraContainer, c, anchor, target, geo)
+            local ax, ay = geo.offsetX or 0, geo.offsetY or 0
+            if geo.canLift and BF.SingleBuffBarPushFor then
+                local px, py = BF.SingleBuffBarPushFor(frame, anchor, target)
+                ax, ay = ax + px, ay + py
+            end
+            c._bf_pushSig = frame._bf_sbPushSig
+            pcall(ReanchorAuraContainer, c, anchor, target, ax, ay)
         end
+    end
+    -- The SLOT twin (Duration Bar Stage 3 follow-up): slot buttons are skipped
+    -- above (they carry no _bf_lastGeo -- their geometry is the single-buff
+    -- arm's), so the single-buff icon slots (sbc<ci>) and bar slots (sbb<ci>)
+    -- are re-placed by their owner: new lift target, and for a bar the new
+    -- size (a fraction of the content rect the power bar just resized).
+    if BF.ReplaceSingleBuffSlotsForPowerBar then
+        BF.ReplaceSingleBuffSlotsForPowerBar(frame)
     end
 end
 
@@ -3628,6 +3852,8 @@ local function TooltipOnlyWalk(c, newSpec, groupKey)
             local n = c:GetAuraGroupFrameCount(gk) or 0
             for i = 1, n do
                 local b = c:GetAuraGroupFrame(gk, i)
+                -- A Stage 4 bar button has no _bf_icon and no tooltip (v1 bar:
+                -- mouse off, BF.InitSpellBarButton), so it is skipped here.
                 if b and b._bf_icon then
                     if not pcall(ApplyTooltipStyle, b, newSpec) then return false end
                 end
@@ -3851,6 +4077,23 @@ function BF:ApplyAuraGridGroupSize(frame, featureKey, groupKey)
     local c = frame._bf_auraContainers and frame._bf_auraContainers[featureKey]
     if not c then return end
     local spec = c._bf_groupSpecs and c._bf_groupSpecs[groupKey]
+    -- Stage 4: a BAR group sizes to its own bar (barW x barH) and spaces by
+    -- its bar cell, never by the square host size.
+    local bs = spec and spec._bf_bar
+    if bs then
+        if bs.w and bs.h then
+            local nb = c:GetAuraGroupFrameCount(groupKey) or 0
+            for i = 1, nb do
+                local b = c:GetAuraGroupFrame(groupKey, i)
+                if b and b._bf_barRegions and not pcall(b.SetSize, b, bs.w, bs.h) then
+                    return
+                end
+            end
+        end
+        PushBarGroupLayout(c, groupKey, spec)
+        pcall(c.UpdateAllAuras, c)
+        return
+    end
     local size = c._bf_curButtonSize or (c._bf_buttonSpec and c._bf_buttonSpec.size)
     if not (spec and size) then return end
     local gSize = size * (spec._bf_sizeMult or 1)
@@ -3895,6 +4138,51 @@ function BF:ApplyAuraGridGroupButtonSpec(frame, featureKey, groupKey, newSpec)
     local c = frame._bf_auraContainers and frame._bf_auraContainers[featureKey]
     local spec = c and c._bf_groupSpecs and c._bf_groupSpecs[groupKey]
     if not spec then return end
+    -- ── Duration Bar plan §5.5 (Stage 4): a BAR group ──────────────────────
+    -- Its buttons were built by BF.InitSpellBarButton inside the init window
+    -- (MakeInitFn), so nothing of the icon walk below applies. The look and the
+    -- SetDurationBar options are change-guarded PER BUTTON
+    -- (BF.RestyleSpellBarButton: style sig + bind key); the button size (the
+    -- bar's own barW x barH, never clamped) and the layout cell move only when
+    -- the bar's size or direction did. A denied resize commits nothing, so the
+    -- next out-of-combat pass retries -- the same contract as the icon walk.
+    if newSpec._bf_bar or spec._bf_bar then
+        local bs, old = newSpec._bf_bar, spec._bf_bar
+        if not bs then return end
+        local sized    = old and old.w == bs.w and old.h == bs.h
+        local cellSame = sized and old.orientation == bs.orientation
+        if self:IsAuraCreationRestricted() then
+            -- Forbidden to tainted code while restricted (the v88h ledger):
+            -- compare, never write. Inside a key a mismatch rebuilds the HOST
+            -- container, whose new group is born with this bar in its init
+            -- window; elsewhere the regen-replayed Layout lands it.
+            if self:IsAuraRecreateWindow() and (not cellSame
+               or BF.SpellBarStyleSig(old) ~= BF.SpellBarStyleSig(bs)
+               or BF.SpellBarBindKey(old) ~= BF.SpellBarBindKey(bs)) then
+                self:RequestAuraRecreate(frame, "container", featureKey,
+                    "barSpec:" .. tostring(groupKey))
+            end
+            return
+        end
+        local n = c:GetAuraGroupFrameCount(groupKey) or 0
+        for i = 1, n do
+            local b = c:GetAuraGroupFrame(groupKey, i)
+            if b and b._bf_barRegions then
+                BF.RestyleSpellBarButton(b, bs)
+                if not sized and bs.w and bs.h
+                   and not pcall(b.SetSize, b, bs.w, bs.h) then
+                    return
+                end
+            end
+        end
+        -- In place: the init closure (MakeInitFn) reads this same table.
+        spec._bf_bar = bs
+        if not cellSame then
+            PushBarGroupLayout(c, groupKey, spec)
+            pcall(c.UpdateAllAuras, c)
+        end
+        return
+    end
     -- Square (Color by Duration): the glyph scale is derived from spec.size
     -- inside ApplyDurationTextStyle, but derive-fresh group specs carry the
     -- BASE container size — the AddAuraGroup / live-resize paths multiply by
@@ -4087,7 +4375,7 @@ local EMPTY_CANDIDATES = {}
 -- container lifted to parent+N put its button at parent+N+1. The
 -- shared container sits at the bottom of the stack, so each button has
 -- to reproduce that level itself or every slot visual drops one level
--- — which for the lane floor (the non-prioritised buff health tint,
+-- — which for the lane floor (the non-prioritized buff health tint,
 -- offset 1 — v92: the lowest offset any slot uses) would TIE it with
 -- the health bar and render it under the bar fill (the exact bug the
 -- dispel overlay's "+2" comment records).
@@ -4100,7 +4388,7 @@ local EMPTY_CANDIDATES = {}
 -- level the kind's own slot button used to get from the math below.
 --
 -- Absolute (not relative to the button) is the load-bearing part: the button's
--- own level is then an inert base, so moving it -- which the fx "Prioritise"
+-- own level is then an inert base, so moving it -- which the fx "Prioritize"
 -- path does -- can never cascade into the other kinds sharing the button. Each
 -- host is re-stamped from exactly here, so a parent-frame level change reaches
 -- hosts and button together.
@@ -4480,6 +4768,7 @@ function BF:EnsureAuraSlotVisual(frame, featureKey, spec)
             c._bf_isSlotVisual = true
             c._bf_sharedSlots  = true
             c._bf_activeSlots  = 0
+            c._bf_frame        = frame   -- Stage 5: SyncEmptyBarAlpha
             MarkVehicleTainted(c)
             pcall(c.SetFrameLevel, c, frame:GetFrameLevel() + SLOT_CONTAINER_LEVEL)
             frame._bf_auraContainers.slots = c
@@ -4490,6 +4779,7 @@ function BF:EnsureAuraSlotVisual(frame, featureKey, spec)
             c._bf_featureKey   = featureKey
         c._bf_isSlotVisual = true
         c._bf_activeSlots  = 0
+        c._bf_frame        = frame   -- Stage 5: SyncEmptyBarAlpha
         MarkVehicleTainted(c)
         frame._bf_auraContainers[featureKey] = c
     end
@@ -4700,7 +4990,11 @@ function BF:AuraSlotStylingState(frame, featureKey)
         if BF:IsAuraRecreateWindow() then return "discard" end
         return nil
     end
-    return btn._bf_icon and "discard" or "init"
+    -- "Has the walk STARTED": `_bf_icon` for the InitAuraButton walk,
+    -- `_bf_barRegions` for the Duration Bar slot's walk (BF.InitSpellBarButton,
+    -- sbb<ci>) -- each init's own re-entry marker, stamped before anything
+    -- else is bound.
+    return (btn._bf_icon or btn._bf_barRegions) and "discard" or "init"
 end
 
 -- v82: exported for the single-buff slot path (BuffsAndContainers'
@@ -4725,6 +5019,268 @@ function BF.RestyleSlotButton(btn, spec, seedOnly)
             btn, spec) then
         btn._bf_specSig = sig
     end
+end
+
+-- ============================================================
+-- Duration Bar plan §5.5 (Stage 3): the SINGLE-BUFF BAR SLOT's button.
+--
+-- Grid2's IndicatorBarAura model: the slot button IS the bar. Its one
+-- StatusBar is bound to the aura's duration with SetDurationBar, so the
+-- ENGINE drives the fill (statusBar:SetTimerDuration) -- no Lua runs per aura
+-- or per frame. Everything below is init-window (creation + binding) or
+-- Layout-time (restyle), change-guarded.
+--
+-- REGIONS (built once, inside initButton -- the only window that survives a
+-- combat /reload, see AnchorSingleBuffSlotButton's v88h note):
+--   bar       StatusBar child, SetAllPoints(holder), at the HOLDER's OWN
+--             frame level (Buzzard Auras' technique, TrackerVisuals.lua
+--             BuildButtonRegions): at the default child level (+1) the fill
+--             would cover the holder's OVERLAY regions; at the same level
+--             they sort above its ARTWORK fill.
+--   bg        BACKGROUND texture on the bar -- below the fill. Covers the
+--             whole bar, or only the unfilled part (Grid2's invertColor
+--             anchoring against the fill texture, AlignPoints below).
+--   pandemic  OVERLAY 0 on the holder: the engine shows it only inside the
+--             refresh window (AddPandemicRegion, registered ONCE -- 12.1.5
+--             errors on a duplicate add). On/off is ALPHA, as the icon's.
+--             Covers the WHOLE bar ("Apply to Background" on).
+--   pandemicFill  the same, anchored to the fill texture (the UNFILLED
+--             background's technique, inverted): covers the FILLED part
+--             only ("Apply to Background" off, the default). A second,
+--             distinct region, registered once beside the first -- never
+--             a re-add of the same one. ApplySpellBarStyle selects which
+--             of the two can show; the other is held invisible.
+--   edges     4x OVERLAY 1 on the holder: the square border, drawn over the
+--             bar's outer pixels, above fill and pandemic.
+-- The preview painter (Auras/DummyAuras.lua) builds the same regions on a
+-- plain frame and runs the same style function, so the two cannot drift.
+-- ============================================================
+-- Grid2's AlignPoints (GridUtils.lua) for the unfilled-part background:
+-- [orientation][not reverseFill] = { fill edge pt, opposite, ... }.
+local SPELL_BAR_ALIGN = {
+    HORIZONTAL = {
+        [true]  = { "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" },
+        [false] = { "BOTTOMRIGHT", "BOTTOMLEFT", "TOPRIGHT", "TOPLEFT" },
+    },
+    VERTICAL = {
+        [true]  = { "BOTTOMLEFT", "TOPLEFT", "BOTTOMRIGHT", "TOPRIGHT" },
+        [false] = { "TOPRIGHT", "BOTTOMRIGHT", "TOPLEFT", "BOTTOMLEFT" },
+    },
+}
+
+function BF.BuildSpellBarRegions(holder, level)
+    local bar = BF.StatusBar(nil, holder)
+    bar:SetAllPoints(holder)
+    bar:SetFrameLevel(level)
+    bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8x8")
+    local bg = BF.Texture(bar, nil, "BACKGROUND", nil, 0)
+    local pandemic = BF.Texture(holder, nil, "OVERLAY", nil, 0)
+    pandemic:SetAllPoints(holder)
+    pandemic:SetColorTexture(0.239216, 1, 0.254902, 0.15)
+    pandemic:SetAlpha(0)
+    local pandemicFill = BF.Texture(holder, nil, "OVERLAY", nil, 0)
+    local fillTex = bar:GetStatusBarTexture()
+    pandemicFill:SetAllPoints(fillTex)
+    pandemicFill:SetColorTexture(0.239216, 1, 0.254902, 0.15)
+    pandemicFill:SetAlpha(0)
+    local edges = {}
+    for i = 1, 4 do
+        local t = BF.Texture(holder, nil, "OVERLAY", nil, 1)
+        t:SetTexture("Interface\\Buttons\\WHITE8x8")
+        t:Hide()
+        edges[i] = t
+    end
+    return { holder = holder, bar = bar, bg = bg, pandemic = pandemic,
+             pandemicFill = pandemicFill, _bf_pandemicFillTex = fillTex,
+             edges = edges }
+end
+
+-- Everything a restyle can change, as one string: the change guard for
+-- ApplySpellBarStyle. Geometry (size / anchor) and the SetDurationBar options
+-- are NOT here -- they have their own guards (the slot's geo sig, the bind
+-- key) because they are applied by different calls.
+local function SpellBarStyleSig(bs)
+    local c, b, bc, pc = bs.color, bs.bgColor, bs.borderColor, bs.pandemicColor
+    return table.concat({
+        bs.orientation, bs.texture, tostring(bs.reverseFill), tostring(bs.bgWhole),
+        c.r, c.g, c.b, c.a, b.r, b.g, b.b, b.a,
+        tostring(bs.border), bs.borderThickness, bc.r, bc.g, bc.b, bc.a,
+        tostring(bs.pandemic), pc.r, pc.g, pc.b, pc.a,
+        tostring(bs.emptyBar), tostring(bs.pandemicBg),
+    }, "|")
+end
+BF.SpellBarStyleSig = SpellBarStyleSig
+
+-- The static look. Plain property setters on BF-owned regions (the Grid2
+-- reuse path re-runs the same calls on an existing slot button out of
+-- combat). Not pcall'd here: the live caller walls it (BF:SlotCall), so a
+-- denied setter aborts the whole restyle and the sig is not committed.
+function BF.ApplySpellBarStyle(r, bs)
+    local bar, bg = r.bar, r.bg
+    bar:SetOrientation(bs.orientation)
+    bar:SetStatusBarTexture(bs.texture)
+    bar:SetReverseFill(bs.reverseFill)
+    local c = bs.color
+    bar:SetStatusBarColor(c.r, c.g, c.b, c.a)
+    -- Background: the bar's own texture, tinted (Grid2's backTexture default).
+    local b = bs.bgColor
+    bg:SetTexture(bs.texture)
+    bg:SetVertexColor(b.r, b.g, b.b, b.a)
+    bg:ClearAllPoints()
+    if bs.bgWhole then
+        bg:SetAllPoints(bar)
+    else
+        -- Unfilled part only (Grid2 IndicatorBarAura): from the fill
+        -- texture's leading edge to the bar's far edge. Re-anchored on every
+        -- restyle -- the fill texture follows SetStatusBarTexture.
+        local tex = bar:GetStatusBarTexture()
+        local pts = SPELL_BAR_ALIGN[bs.orientation][not bs.reverseFill]
+        bg:SetPoint(pts[1], tex, pts[2], 0, 0)
+        bg:SetPoint(pts[3], tex, pts[4], 0, 0)
+        bg:SetPoint(pts[2], bar, pts[2], 0, 0)
+        bg:SetPoint(pts[4], bar, pts[4], 0, 0)
+    end
+    -- Stage 5: with Show Empty Bar When Missing on, the background and the
+    -- border are drawn ONCE, by the bar's empty-state art on the unit frame
+    -- (BuffsAndContainers.lua, MaintainSingleBuffEmptyBar) directly under this
+    -- button -- so the button keeps only its fill and pandemic overlay, and
+    -- nothing is drawn twice or alpha-stacked while the buff is up.
+    if bs.emptyBar then bg:Hide() else bg:Show() end
+    -- Square border: hollow edges inside the holder rect (ApplySolidIcon's
+    -- edge layout).
+    local edges, holder = r.edges, r.holder
+    if bs.border and not bs.emptyBar and (bs.borderThickness or 1) > 0 then
+        local px = BF:PixelsToUI(bs.borderThickness or 1)
+        local top, bottom, left, right = edges[1], edges[2], edges[3], edges[4]
+        top:ClearAllPoints()
+        top:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
+        top:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, 0)
+        top:SetHeight(px)
+        bottom:ClearAllPoints()
+        bottom:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", 0, 0)
+        bottom:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 0, 0)
+        bottom:SetHeight(px)
+        left:ClearAllPoints()
+        left:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, -px)
+        left:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", 0, px)
+        left:SetWidth(px)
+        right:ClearAllPoints()
+        right:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -px)
+        right:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 0, px)
+        right:SetWidth(px)
+        local bc = bs.borderColor
+        for i = 1, 4 do
+            edges[i]:SetVertexColor(bc.r, bc.g, bc.b, bc.a)
+            edges[i]:Show()
+        end
+    else
+        for i = 1, 4 do edges[i]:Hide() end
+    end
+    -- Pandemic: color always stamped, visibility by ALPHA only (the engine
+    -- owns the region's Shown aspect once it is registered).
+    --
+    -- Review item B1: two regions, one selected. The whole-bar one shows
+    -- with Apply to Background on, the fill-anchored one with it off. The
+    -- one NOT selected is held invisible twice over -- region alpha 0 AND a
+    -- zero-alpha color texture -- so nothing the engine drives on a bound
+    -- region (its Shown aspect, any pandemic animation's alpha) can bring
+    -- it back. The fill overlay follows the fill texture as the UNFILLED
+    -- background does, but is re-anchored only when SetStatusBarTexture
+    -- actually handed back a different texture object -- a bound region's
+    -- points are not touched for nothing.
+    local pc = bs.pandemicColor
+    local whole, part = r.pandemic, r.pandemicFill
+    local onWhole = bs.pandemic and bs.pandemicBg and true or false
+    whole:SetColorTexture(pc.r, pc.g, pc.b, onWhole and pc.a or 0)
+    whole:SetAlpha(onWhole and 1 or 0)
+    if part then
+        local onPart = bs.pandemic and not bs.pandemicBg and true or false
+        local tex = bar:GetStatusBarTexture()
+        if r._bf_pandemicFillTex ~= tex then
+            part:ClearAllPoints()
+            part:SetAllPoints(tex)
+            r._bf_pandemicFillTex = tex
+        end
+        part:SetColorTexture(pc.r, pc.g, pc.b, onPart and pc.a or 0)
+        part:SetAlpha(onPart and 1 or 0)
+    end
+end
+
+-- SetDurationBar, change-guarded on its two options. A DENIED bind is never
+-- cached (Buzzard Auras ApplyBarBinding's rule): the key is cleared so the
+-- next out-of-combat Layout retries instead of the guard short-circuiting a
+-- bar that is not bound. Re-calling it on an already-bound bar is the Grid2
+-- reuse path (GridIndicatorAuras AcquireAuraSlotButton -> init -> Bar_Layout
+-- -> SetDurationBar) and BF's own BindDurationText precedent.
+-- The bind key, exported for the in-key compare in BuffsAndContainers
+-- (MaintainSingleBuffBarSlot): it derives the SAME key BindSpellBar stamps,
+-- without binding anything.
+local function SpellBarBindKey(bs)
+    return tostring(bs.direction) .. ":" .. tostring(bs.interpolation)
+end
+BF.SpellBarBindKey = SpellBarBindKey
+
+local function BindSpellBar(btn, bar, bs)
+    local key = SpellBarBindKey(bs)
+    if btn._bf_barBindKey == key then return end
+    if btn.SetDurationBar and BF:SlotCall("SetDurationBar", btn.SetDurationBar,
+            btn, bar, { direction = bs.direction, interpolation = bs.interpolation }) then
+        btn._bf_barBindKey = key
+    else
+        btn._bf_barBindKey = nil
+    end
+end
+
+-- The bar slot's whole init: regions, the one-time pandemic registration,
+-- the look, the binding. Called from the slot's initButton ONLY (the init
+-- window); EnsureAuraSlotVisual pcalls it, and an interrupted init is
+-- discarded and rebuilt on a fresh key (the v88 commit gate).
+--
+-- No tooltip on a v1 bar: mouse input is stamped OFF the way
+-- ApplyTooltipStyle does it with tooltips off (motion drives the native
+-- tooltip hit-testing separately, so both flags), so a bar laid over the
+-- health area never eats click-casting.
+function BF.InitSpellBarButton(btn, bs)
+    if btn._bf_barRegions then return end   -- re-entry guard (no double build)
+    btn:EnableMouse(false)
+    if btn.SetMouseMotionEnabled then btn:SetMouseMotionEnabled(false) end
+    if btn.SetHideTooltipInCombat then btn:SetHideTooltipInCombat(true) end
+    -- The level is read here, in the init window, where it is legal (the
+    -- v88i rule: never read a level off an aura button later).
+    local r = BF.BuildSpellBarRegions(btn, btn:GetFrameLevel())
+    btn._bf_barRegions = r
+    if btn.AddPandemicRegion then
+        pcall(btn.AddPandemicRegion, btn, r.pandemic)
+        -- Review item B1: the fill-only overlay, a distinct region, bound
+        -- once in the same window (never the same region twice).
+        pcall(btn.AddPandemicRegion, btn, r.pandemicFill)
+    end
+    BF.ApplySpellBarStyle(r, bs)
+    btn._bf_barStyleSig = SpellBarStyleSig(bs)
+    BindSpellBar(btn, r.bar, bs)
+    -- v88 COMPLETION MARKER, the bar twin of InitAuraButton's: stamped LAST,
+    -- so it answers "did the init walk finish". `_bf_barRegions` (stamped
+    -- mid-walk) only answers "has anything been built". The slot is created
+    -- with fullInit, so this is what the commit gate's health bit, the
+    -- restricted-recreate success test and BF:AuraSlotStylingState read. A
+    -- DENIED bind does not hold it back: the walk completed, and the bind key
+    -- (cleared on denial) makes the next out-of-combat restyle retry it.
+    btn._bf_initDone = true
+end
+
+-- Layout-time restyle of an existing bar slot button: the look (sig-guarded,
+-- walled -- a denied setter commits nothing and retries next pass) and the
+-- binding options (key-guarded). Restyles, never builds: a button whose init
+-- did not run has no regions and is left alone.
+function BF.RestyleSpellBarButton(btn, bs)
+    local r = btn and btn._bf_barRegions
+    if not (r and bs) then return end
+    local sig = SpellBarStyleSig(bs)
+    if btn._bf_barStyleSig ~= sig
+       and BF:SlotCall("RestyleSpellBar", BF.ApplySpellBarStyle, r, bs) then
+        btn._bf_barStyleSig = sig
+    end
+    BindSpellBar(btn, r.bar, bs)
 end
 
 function BF:GetAuraSlotButton(frame, featureKey)
@@ -4776,8 +5332,8 @@ function BF:SetAuraSlotCandidates(frame, featureKey, cand)
 end
 
 -- v84 (Stage 5 §9.8): the slot's per-kind level HOSTS, and a live level change
--- for ONE of them (the fx "Prioritise" toggles). Because host levels are
--- ABSOLUTE, re-levelling one kind can never disturb the others sharing the
+-- for ONE of them (the fx "Prioritize" toggles). Because host levels are
+-- ABSOLUTE, re-leveling one kind can never disturb the others sharing the
 -- button — which is the whole reason a merged slot can carry kinds that used to
 -- sit at different levels.
 -- PTR-VERIFY: SetFrameLevel on a BF-owned child host frame of a slot button
@@ -4797,7 +5353,7 @@ function BF:SetSlotHostLevel(frame, featureKey, hostKey, offset)
     -- 2026-09-10): inside a key the host re-level is denied. Compare only --
     -- the stored offset already said it differs -- write NOTHING, and ask for
     -- a rebuilt slot, whose hosts are born at the wanted level (FxHostDefsFor
-    -- bakes the Prioritise rung at creation).
+    -- bakes the Prioritize rung at creation).
     if BF:IsAuraCreationRestricted() and BF:IsAuraRecreateWindow() then
         BF:RequestAuraRecreate(frame, "slot", featureKey, "level")
         return
@@ -4916,7 +5472,7 @@ end
 -- were cleared now gets nothing.
 --
 -- v99: _bf_styleGen is gone from the codebase -- the cheap pre-guard it keyed
--- was removed in favour of one complete comparison, so there is nothing left
+-- was removed in favor of one complete comparison, so there is nothing left
 -- that could short-circuit ahead of the wiped snapshot.
 --
 -- A PROBE. If wiping these lights the display back up, the fix is to clear the
@@ -5085,7 +5641,7 @@ function BF:_DebugSlotRoster(arg)
                 end
                 -- v88p: DRAW ORDER. The slot container's level is written ONCE,
                 -- at creation, as an ABSOLUTE number (frame level + 1). Nothing
-                -- re-asserts it, so a frame that is re-levelled afterwards
+                -- re-asserts it, so a frame that is re-leveled afterwards
                 -- leaves its container stranded at the old depth -- shown,
                 -- anchored, unit-bound and behind the frame's own art.
                 --
@@ -5480,9 +6036,9 @@ BF.DISPEL_VISUAL_ORDER = { "dispelOverlay", "dispelBorder", "dispelDot", "dispel
 -- single-sourced in Indicators/BuffsAndContainers.lua (the FX_LEVEL_* block) --
 -- read it, including its CROSS-LANE TIE POLICY, before touching a number here.
 -- Each lane runs
---     buff (Prioritise OFF)  <  container  <  dispel  <  buff (Prioritise ON)
+--     buff (Prioritize OFF)  <  container  <  dispel  <  buff (Prioritize ON)
 -- so a dispel kind sits exactly one rung above its per-container twin
--- (BF.CONTAINER_FX_LEVEL) and one below a prioritised buff effect:
+-- (BF.CONTAINER_FX_LEVEL) and one below a prioritized buff effect:
 --
 --   tint     buff 1  < container 2  < DISPEL 3  < buff-prio 4   (host +2/+3/+4/+5)
 --   overlay  buff 2  < container 3  < DISPEL 4  < buff-prio 5   (host +3/+4/+5/+6)
@@ -5502,9 +6058,9 @@ BF.DISPEL_VISUAL_ORDER = { "dispelOverlay", "dispelBorder", "dispelDot", "dispel
 --
 -- Cross-KIND ties are policy, not oversight: eight tint+overlay rungs do not
 -- fit in the usable integers 1..5, so per-LANE order is strict and cross-kind
--- ties (this overlay 4 vs a prioritised buff tint 4; the container overlay 3 vs
+-- ties (this overlay 4 vs a prioritized buff tint 4; the container overlay 3 vs
 -- this tint 3) resolve by draw order -- as they always have (pre-v92 this
--- overlay outdrew a prioritised buff tint outright).
+-- overlay outdrew a prioritized buff tint outright).
 BF.DISPEL_VISUAL_LEVEL = { dispelOverlay = 4, dispelBorder = 12, dispelDot = 223, dispelHealthColor = 3 }
 local DISPEL_VISUAL_TAG = { dispelOverlay = "O", dispelBorder = "B", dispelDot = "D", dispelHealthColor = "H" }
 -- Filled at load by the indicator files:
@@ -6194,6 +6750,8 @@ function RC.OwnerFor(kind, key)
     elseif kind == "slot" then
         if DISPEL_SET_KINDS[key] then return "dispel" end
         if key:match("^sbc%d") or key:match("^fx") then return "buffsAndContainers" end
+        -- Duration Bar slots: rebuilt by the same Layout (EnsureBuffContainers).
+        if key:match("^sbb%d") then return "buffsAndContainers" end
         if key:match("^dfx") then return "debuffIcons" end
     end
     return nil
@@ -7118,7 +7676,7 @@ end
 -- TERMINATION. The ticker cancels itself the moment its snapshot is
 -- exhausted, and nothing polls: steady-state cost is exactly zero, not "a
 -- cheap tick". It is re-armed from ONE hook — BF:ForceFramesCreation
--- (BFLayout.lua), the only place header children are ever materialised —
+-- (BFLayout.lua), the only place header children are ever materialized —
 -- so login, a layout reload and a CFG header growing all re-arm, and
 -- nothing else has to know this exists.
 --
@@ -7587,6 +8145,7 @@ function BF:RefreshAuraContainerVisibilityForUnit(unit)
     if not unit then return end
     local bucket = self.frames_of_unit and rawget(self.frames_of_unit, unit)
     if not bucket then return end
+    local mrb = self.indicators and self.indicators.missingRaidBuff
     -- Same union as every other writer, including the cinematic term: a
     -- phase/connection event landing during a cinematic must not re-raise the
     -- alpha the gate is holding down.
@@ -7614,6 +8173,15 @@ function BF:RefreshAuraContainerVisibilityForUnit(unit)
                 if sc then ApplyContainerVisAlpha(sc, unit, sc._bf_shown) end
             end
         end
+        -- Missing raid buff icons (2026-11-17). Not containers, so the gate
+        -- above never reached them, and their own bindings ("buffs",
+        -- "offline", "death") do not fire on a visibility or phase edge or a
+        -- hostile/charm edge -- every one of which arrives here. Owner rule:
+        -- never shown on a unit that is not visible, dead or offline; its
+        -- Update tests all three (plus suppression), so re-running it on the
+        -- edge is the whole fix. One Update per frame of the unit, on edges
+        -- only.
+        if mrb then mrb:Update(frame, unit) end
     end
 end
 

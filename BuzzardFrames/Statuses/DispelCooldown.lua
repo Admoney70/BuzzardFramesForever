@@ -296,6 +296,7 @@ end
 
 -- Called on spec change, talent change, and setting toggle.
 function BF:UpdateDispelCooldownTracking()
+    if BF.isForever then return end -- [FOREVER] Dispel Cooldown fully off on Forever (owner Q3): no resolution, no events
     if not self:IsAnyDispelCooldownGatingEnabled() then
         StopTracking()
         return

@@ -672,17 +672,24 @@ function BF:OnChatCommand(input)
             print("|cffd3ff7dBuzzardFrames:|r ufhealth -- no player frame built")
             return
         end
+        -- Debug output goes to the copyable text window (plain text), with
+        -- chat only as the fallback when no window can be shown.
+        local L = {}
+        local function out(line)
+            line = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            L[#L + 1] = line
+        end
         local function S(v) return issecretvalue and issecretvalue(v) and "SECRET" or tostring(v) end
         local function R(v) return type(v) == "number" and string.format("%.2f", v) or tostring(v) end
         local function frameLine(tag, fr)
             if not fr then
-                print("|cffd3ff7dufhealth:|r " .. tag .. " = nil")
+                out("|cffd3ff7dufhealth:|r " .. tag .. " = nil")
                 return
             end
             local w, h = fr:GetSize()
             local pt, rel, relPt, x, y = fr:GetPoint(1)
             local relName = rel and (rel.GetName and rel:GetName() or "?") or "nil"
-            print(("|cffd3ff7dufhealth:|r %s shown=%s vis=%s alpha=%s eff=%s size=%sx%s pts=%d anchor=%s->%s.%s (%s,%s) scale=%s")
+            out(("|cffd3ff7dufhealth:|r %s shown=%s vis=%s alpha=%s eff=%s size=%sx%s pts=%d anchor=%s->%s.%s (%s,%s) scale=%s")
                 :format(tag, tostring(fr:IsShown()), tostring(fr:IsVisible()), R(fr:GetAlpha()),
                     R(fr:GetEffectiveAlpha()), R(w), R(h), fr:GetNumPoints(),
                     tostring(pt), relName, tostring(relPt), R(x), R(y), R(fr:GetEffectiveScale())))
@@ -695,13 +702,13 @@ function BF:OnChatCommand(input)
         local mn, mx = hb:GetMinMaxValues()
         local r, g, b, a = hb:GetStatusBarColor()
         local fill = hb:GetStatusBarTexture()
-        print(("|cffd3ff7dufhealth:|r bar min=%s max=%s value=%s color=%s,%s,%s a=%s cachedA=%s grad=%s tex=%s")
+        out(("|cffd3ff7dufhealth:|r bar min=%s max=%s value=%s color=%s,%s,%s a=%s cachedA=%s grad=%s tex=%s")
             :format(S(mn), S(mx), S(hb:GetValue()), R(r), R(g), R(b), R(a), R(f._bf_healthA),
                 tostring(f._bf_healthGradient), tostring(fill and fill:GetTexture())))
         if fill then
             local fw, fh = fill:GetSize()
             local vr, vg, vb, va = fill:GetVertexColor()
-            print(("|cffd3ff7dufhealth:|r fill shown=%s size=%sx%s vertex=%s,%s,%s,%s masks=%d layer=%s")
+            out(("|cffd3ff7dufhealth:|r fill shown=%s size=%sx%s vertex=%s,%s,%s,%s masks=%d layer=%s")
                 :format(tostring(fill:IsShown()), R(fw), R(fh), R(vr), R(vg), R(vb), R(va),
                     fill:GetNumMaskTextures(), tostring(fill:GetDrawLayer())))
         end
@@ -709,24 +716,30 @@ function BF:OnChatCommand(input)
         if bg then
             local bw, bh = bg:GetSize()
             local br, bgg, bb, ba = bg:GetVertexColor()
-            print(("|cffd3ff7dufhealth:|r bg shown=%s size=%sx%s alpha=%s vertex=%s,%s,%s,%s masks=%d")
+            out(("|cffd3ff7dufhealth:|r bg shown=%s size=%sx%s alpha=%s vertex=%s,%s,%s,%s masks=%d")
                 :format(tostring(bg:IsShown()), R(bw), R(bh), R(bg:GetAlpha()),
                     R(br), R(bgg), R(bb), R(ba), bg:GetNumMaskTextures()))
         end
         local m = f._oufIconCutoutMask
         if m then
             local mw, mh = m:GetSize()
-            print(("|cffd3ff7dufhealth:|r iconCutoutMask shown=%s size=%sx%s tex=%s")
+            out(("|cffd3ff7dufhealth:|r iconCutoutMask shown=%s size=%sx%s tex=%s")
                 :format(tostring(m:IsShown()), R(mw), R(mh), tostring(m:GetTexture())))
         end
-        print(("|cffd3ff7dufhealth:|r alt eligible=%s active=%s band=%s drawn=%s powerH=%s spec=%s ptype=%s class=%s")
+        out(("|cffd3ff7dufhealth:|r alt eligible=%s active=%s band=%s drawn=%s powerH=%s spec=%s ptype=%s class=%s")
             :format(tostring(self.IsAltPowerBarEligible and self:IsAltPowerBarEligible()),
                 tostring(self.IsAltPowerBarActive and self:IsAltPowerBarActive()),
                 tostring(self.GetOUFPlayerHealthBandHeight and self:GetOUFPlayerHealthBandHeight()),
                 tostring(self.GetOUFPlayerHealthDrawnHeight and self:GetOUFPlayerHealthDrawnHeight()),
                 tostring(self.GetPowerBarEffectiveHeight and self:GetPowerBarEffectiveHeight()),
-                tostring(GetSpecialization()), S(UnitPowerType("player")),
+                tostring((GetSpecialization or C_SpecializationInfo.GetSpecialization)()), S(UnitPowerType("player")),
                 tostring(select(2, UnitClass("player")))))
+        if not self:ShowTextWindow("BuzzardFrames ufhealth", table.concat(L, "\n"), {
+            status = "Player frame health-bar chain, read back as-is (nothing is changed).",
+            width = 760, height = 480,
+        }) then
+            for i = 1, #L do print(L[i]) end
+        end
     elseif input:match("^pingtest") then
         local unit, typ = input:match("^pingtest%s+(%S+)%s*(%S*)")
         unit = (unit or "player"):lower()
@@ -736,14 +749,13 @@ function BF:OnChatCommand(input)
             { "assist", "Assist" }, { "onmyway", "OnMyWay" },
             { "alertthreat", "AlertThreat" }, { "alertnotthreat", "AlertNotThreat" },
         }
+        -- The Ping_Frame_ kit name for each ping type, by NAME (Grid2
+        -- StatusPing.lua, identical in its Retail and WoW Forever copies).
+        -- Deliberately not asked of C_Ping.GetTextureKitForType: on Forever
+        -- its answer named a different ping's art (owner-reported 2026-11-17).
+        local KIT_NAME = { AlertThreat = "Threat", AlertNotThreat = "NonThreat" }
         local function kitFor(enumName)
-            -- Prefer the client's own texture kit mapping; fall back to the
-            -- enum name, which is what the kits are named on 12.x.
-            local ok, kit
-            if C_Ping and C_Ping.GetTextureKitForType and Enum.PingSubjectType then
-                ok, kit = pcall(C_Ping.GetTextureKitForType, Enum.PingSubjectType[enumName])
-            end
-            return (ok and type(kit) == "string" and kit ~= "") and kit or enumName
+            return KIT_NAME[enumName] or enumName
         end
         local function fire(kit)
             local ok, err = self:DebugFakePing(unit, kit)

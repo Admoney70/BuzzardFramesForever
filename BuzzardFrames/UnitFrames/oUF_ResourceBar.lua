@@ -67,7 +67,7 @@ local RUNE_COUNT = 6
 --
 -- When one of these is active the per-pip StatusBars below own the bright fill
 -- outright and _fill is demoted to the dim empty backing -- the same division
--- of labour the DK rune pips already use. Every other resource keeps the plain
+-- of labor the DK rune pips already use. Every other resource keeps the plain
 -- two-state _fill and builds no StatusBars at all.
 local ESSENCE_TYPE  = 19
 local SHARD_TYPE    = 7

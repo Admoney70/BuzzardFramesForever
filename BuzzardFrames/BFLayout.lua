@@ -534,23 +534,11 @@ OnUnitChanged = function(frame, unit)
         end
     end
 
-    -- Third of the same family, for statusOverlay. NOT the fix for the
-    -- "status text smaller than configured" report -- that was a
-    -- GetFont -> SetFont round trip shrinking the height on every tick of
-    -- a dead unit (see StatusOverlay:Layout), plus ReloadLayout skipping
-    -- frame:Layout() on a flat change that left the frame size unchanged
-    -- (see the _forceReload note in BF:ReloadLayout). This re-run only
-    -- covers the Status Text option setters, which sweep BF.activeFrames
-    -- (frames holding a unit) rather than every header child: a spare
-    -- that comes into service after such an edit picks up the current
-    -- font, border and position here. One SetFont + SetPoint per unit
-    -- assignment, in line with the two re-runs above.
-    do
-        local statusOverlay = BF.GetIndicatorByName and BF:GetIndicatorByName("statusOverlay")
-        if statusOverlay and statusOverlay:GetFrame(frame) then
-            statusOverlay:Layout(frame)
-        end
-    end
+    -- (2026-11-17) The statusOverlay re-run that sat here is gone. Status
+    -- text is now one block per scope, re-applied to EVERY registered frame
+    -- of the scope (spares included) by RunScopePass in
+    -- Indicators/StatusText_Overlay.lua, so a spare that comes into service
+    -- already holds its scope's current font and position.
 
     -- Grid2 parity: private aura icons and dispel overlay are now
     -- registered indicators (privateAuraIcons, privateAuraDispelOverlay)
@@ -1161,6 +1149,9 @@ function BFHeaderClass.prototype:Reset()
     -- CFG section resolution (set by AddCustomFrameHeaders)
     self._cfgFlat     = nil
     self._cfgGroup    = nil
+    -- This header's children change status-text scope (group -> regular)
+    -- without a config generation bump; re-apply scope blocks.
+    if BF.ScheduleStatusTextPass then BF:ScheduleStatusTextPass() end
     -- Aura source profile (resolved from cfAuraSourceGroupType at layout time)
     self.cfAuraProfile               = nil
     -- Layout Settings (per-group overrides)
@@ -3214,7 +3205,7 @@ end
 -- genuinely differ outside raid instances: GetInstanceMaxGroup answers 8
 -- ("hide nothing") for any non-raid instance type, while maxGroup is
 -- ceil(maxPlayers/5) -- 1 in a 5-player instance.
-function BF:SetGroupType(partyType, instType, maxPlayers, maxGroup, autoCap, contextIsRaid, flatID)
+function BF:SetGroupType(partyType, instType, maxPlayers, maxGroup, autoCap, contextIsRaid, flatID, frameSortActive)
     self.partyType      = partyType
     self.instType       = instType
     self.instMaxPlayers = maxPlayers
@@ -3238,6 +3229,10 @@ function BF:SetGroupType(partyType, instType, maxPlayers, maxGroup, autoCap, con
     -- self-clearing, and a swallowed reload rebuilt nothing on replay.
     self.instContextIsRaid = contextIsRaid
     self.instFlatID        = flatID
+    -- Whether the external sorter owned the main header when the layout was
+    -- BUILT (2026-11-17). Same kind of term as the two above: committed on
+    -- both arms of the gate, never ahead of it.
+    self.instFrameSortActive = frameSortActive
 end
 
 -- ── AddCustomFrameHeaders (Grid2: AddSpecialHeaders) ────────────
@@ -3298,6 +3293,9 @@ local function ConfigureCustomFrameHeader(self, entry)
             local flat = grp.flat
             header._cfgFlat = flat
             header._cfgGroup = grp
+            -- Children now belong to this group's status-text scope; no
+            -- config generation bump covers that, so re-apply scope blocks.
+            if BF.ScheduleStatusTextPass then BF:ScheduleStatusTextPass() end
             -- Aura show toggles. v60: resolved per sub-category via
             -- ResolveCFGAurasSubcat rather than indexing flat.auras, so the
             -- independent Buffs/Debuffs per-layout toggles and the CFG
@@ -4701,6 +4699,17 @@ function BF:ReloadLayout(force)
     -- Determine layout name
     local layoutName = self:ResolveLayoutName()
 
+    -- External sorter state for THIS context (2026-11-17). While it is
+    -- active the main header filters by a fixed name list instead of group
+    -- (FixHeaderAttributes / FrameSortIntegration.lua). Only a rebuild
+    -- removes that list, so a change in whether the sorter applies --
+    -- e.g. a party moving from the open world (its World option on) into a
+    -- dungeon (its Dungeon option off) on the same flat -- must rebuild, or
+    -- the stale list keeps hiding everyone not on it. Combat needs nothing
+    -- extra: the sorter defers its whole run, including provider:Sort(),
+    -- until combat ends. Always false when the sorter is not installed.
+    local frameSortActive = (self.IsFrameSortActive and self:IsFrameSortActive()) and true or false
+
     -- _contextIsParty / _contextIsRaid were updated unconditionally by
     -- ResolveContext above. _resolvedProfile MUST be kept in lockstep with
     -- them — when the context flips between calls, render paths that read
@@ -4835,6 +4844,7 @@ function BF:ReloadLayout(force)
        or currentFlatID ~= self.instFlatID
        or (self.layoutHasAuto and (maxPlayers ~= self.instMaxPlayers or maxGroup ~= self.instMaxGroup))
        or autoCapChanged
+       or frameSortActive ~= (self.instFrameSortActive or false)
        or force
        -- Grid2 parity (GridLayout.lua:535): forceReload is a term OF the gate,
        -- not just a flag the body reads. It is set below BEFORE the RunSecure
@@ -4884,7 +4894,7 @@ function BF:ReloadLayout(force)
         -- Grid2 pattern: if in combat, queue ReloadLayout for after combat
         if not self:RunSecure(3, self, "ReloadLayout") then
             self:SetGroupType(gt, instanceType, maxPlayers, maxGroup, autoCap,
-                self._contextIsRaid, currentFlatID)
+                self._contextIsRaid, currentFlatID, frameSortActive)
             self:SwitchMark("sw:loadStart")
             self:LoadLayout(layoutName)
             self._forceReload = nil
@@ -4907,7 +4917,7 @@ function BF:ReloadLayout(force)
         -- guaranteed servicer now, which also retires the "or whichever
         -- comes first" deferral described in the gate's CFG comment.
         self:SetGroupType(gt, instanceType, maxPlayers, maxGroup, autoCap,
-            self._contextIsRaid, currentFlatID)
+            self._contextIsRaid, currentFlatID, frameSortActive)
         self:SwitchMark("sw:noReloadNeeded")
         self:SwitchFlush()
     end

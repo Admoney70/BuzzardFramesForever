@@ -9,6 +9,7 @@
 -- Extracted from Core.lua in the Core split refactor.
 -- ============================================================
 local BF = _G["BuzzardFrames"]
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 -- ── Flat defaults backfill helper ───────────────────────────────────────
 -- Restores any keys that are missing from a migrated flat because AceDB
@@ -1618,7 +1619,7 @@ end
 -- copies) from each flat.text → flat.healthPower. Idempotent per profile
 -- via rp._offlineDeadColorsRelocated.
 --
--- Merge policy: source value wins -- the user's customisation flows
+-- Merge policy: source value wins -- the user's customization flows
 -- forward. Existing rp.healthPower values for these keys (e.g. a default
 -- left over from a brand-new profile) are overwritten.
 function BF:MigrateOfflineDeadColorsToHealthPower(profileName)
@@ -1657,7 +1658,7 @@ function BF:MigrateOfflineDeadColorsToHealthPower(profileName)
     -- Per-flat sub-tables. Iterate every flat; both text and healthPower
     -- per-flat tables are sparse (only user-modified keys are present),
     -- so move() is a no-op for flats that never had these keys
-    -- customised at the per-layout level.
+    -- customized at the per-layout level.
     local rpl = rp.layouts
     local fl  = rpl and rpl.flatLayouts
     if type(fl) == "table" then
@@ -1666,7 +1667,7 @@ function BF:MigrateOfflineDeadColorsToHealthPower(profileName)
                 local ft = rawget(flat, "text")
                 local fh = rawget(flat, "healthPower")
                 if type(ft) == "table" then
-                    -- Materialise flat.healthPower if missing so we have
+                    -- Materialize flat.healthPower if missing so we have
                     -- a destination. WireSectionFallback will be applied
                     -- by RehydrateFlats on the next access path.
                     if type(fh) ~= "table" then
@@ -3652,7 +3653,7 @@ end
 -- Custom Frame Group of every per-Layout user would silently switch to the
 -- shared settings.
 --
--- Modelled on MigrateSplitCFGOverrideAuras above: cfgDB has its own profile
+-- Modeled on MigrateSplitCFGOverrideAuras above: cfgDB has its own profile
 -- set, so this walks cfgDB itself and is dispatched ONCE, outside the
 -- per-profile loop. Each cfgDB profile is paired with the SAME-NAMED rpDB
 -- profile, which is where the per-Layout toggles live.
@@ -4178,6 +4179,8 @@ local SINGLE_BUFF_VISUAL_FAMILIES = {
     "specSpellOrdering", "specSpellCooldownText", "specSpellExpirationGlow",
     "specSpellBounce", "specSpellVisualAlert", "specSpellColors",
     "specSpellBorders", "specSpellOverlays",
+    -- Duration Bar plan: Show Icon off, text in the icon's place, the bar.
+    "specSpellIconHidden", "specSpellTextInPlace", "specSpellBar",
 }
 
 -- Deep copy, so a migrated entry never shares a table reference (font color,
@@ -5025,6 +5028,7 @@ end
 --
 -- One entry PER SPEC, matching 54 and 57.
 function BF:_AuraMig_CuratedSpells(acp)
+    if IS_FOREVER then return end -- [FOREVER] E1: Retail curated seed; Forever_BuffList.lua seeds instead
     local specSpells = BF.SPEC_SPELLS
     if type(specSpells) ~= "table" then return end
 
@@ -5123,6 +5127,15 @@ local LATE_CURATED_SEEDS_V92 = {
 
 function BF:SeedLateCuratedSingleBuffs(acp)
     if type(acp) ~= "table" then return end
+    -- [FOREVER] begin
+    -- E1 + Phase J: the Retail late-curated and pseudo seeds are skipped on
+    -- WoW Forever; this accessor hook seeds the Forever Buff List instead (own
+    -- sentinel, one compare after the first call).
+    if IS_FOREVER then
+        if BF.Forever.SeedBuffList then BF.Forever.SeedBuffList(acp) end
+        return
+    end
+    -- [FOREVER] end
     -- Pseudo entries ride the same access hook (its own sentinel makes this
     -- one cheap compare after the first call). Must run BEFORE the early-out
     -- below, or a profile already past the curated seed never gets them.
@@ -5204,6 +5217,7 @@ local PSEUDO_SEEDS = {
 -- row too or the feature becomes unconfigurable again.
 function BF:SeedPseudoSingleBuffs(acp)
     if type(acp) ~= "table" then return end
+    if IS_FOREVER then return end -- [FOREVER] E1: Forever_BuffList.lua seeds Swiftmendable
     if acp._pseudoSeedV77 then return end
     acp._pseudoSeedV77 = true
 
@@ -6874,6 +6888,199 @@ function BF:MigrateUFRoleSpecEntries()
             for _ in pairs(rawget(ufp, "ufSpecLayouts") or {}) do anySpec = true break end
             ufp.enableUFRoleLayouts = anyRole
             ufp.enableUFSpecLayouts = anySpec
+        end
+    end
+end
+
+-- ============================================================
+-- MigrateFrameFxShowSwitch  (dbVersion 81 -- Display-tab redesign, 2026-10-14)
+--
+-- Frame effects on a Buff List entry gained their own switch, Show Frame
+-- Effects (sbVisuals.specSpellFrameFxOn["sb"][sid] = true), and no longer
+-- need Customize Buff. Default OFF -- so an entry whose frame effects were
+-- RENDERING before this change would lose them. This turns the switch on for
+-- exactly those, and for nothing else, so nothing changes on screen:
+--
+--   the entry is a single buff, its Customize Buff was ON
+--   (singleBuffCustomized ~= false -- the old projection read the effects
+--   through the customized-only store root), and it holds a frame-effect row
+--   (specSpellColors / specSpellBorders / specSpellOverlays) that is not
+--   disabled (enabled ~= false -- the old projection's own test).
+--
+-- The switch is set for that row's spell key. An entry whose effects were
+-- configured but did NOT render because Customize Buff was off keeps the
+-- switch OFF: turning it on would start showing effects the user never saw.
+-- The remaining old gates (blacklist, Spec condition, per-Layout Enabled,
+-- the spell being the entry's own) are still applied at render time, so they
+-- are not folded in here.
+--
+-- acDB has its own profile set; walks every profile once, sentinel-guarded
+-- per profile (_frameFxSwitchV81). Idempotent: it only ever sets true, and a
+-- second pass finds the sentinel. Fresh installs stamp straight at DB_VERSION
+-- and never reach it.
+-- ============================================================
+local FRAME_FX_FAMILIES_V81 = { "specSpellColors", "specSpellBorders", "specSpellOverlays" }
+
+-- The rule, for ONE entry. Shared with the profile importer
+-- (ApplySingleBuffPortable), which applies it to the entries an export string
+-- older than dbVersion 81 brings in: imported data never passes through this
+-- dispatcher. Only ever sets true; idempotent.
+local function ApplyFrameFxShowSwitchRule(c)
+    local root = type(c) == "table" and c.singleBuff
+        and c.singleBuffCustomized ~= false and c.sbVisuals
+    if type(root) ~= "table" then return end
+    for _, family in ipairs(FRAME_FX_FAMILIES_V81) do
+        local fam = root[family]
+        if type(fam) == "table" then
+            for kspec, map in pairs(fam) do
+                if type(map) == "table" then
+                    for sid, row in pairs(map) do
+                        if type(row) == "table" and row.enabled ~= false then
+                            local on = root.specSpellFrameFxOn
+                            if type(on) ~= "table" then
+                                on = {}
+                                root.specSpellFrameFxOn = on
+                            end
+                            local m = on[kspec]
+                            if type(m) ~= "table" then
+                                m = {}
+                                on[kspec] = m
+                            end
+                            m[sid] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+BF.ApplyFrameFxShowSwitchRule = ApplyFrameFxShowSwitchRule
+BF.FRAME_FX_SWITCH_DB_VERSION = 81
+
+function BF:MigrateFrameFxShowSwitch()
+    local acDB = self.acDB
+    if not (acDB and acDB.profiles) then return end
+    for _, acp in pairs(acDB.profiles) do
+        if type(acp) == "table" and not acp._frameFxSwitchV81 then
+            acp._frameFxSwitchV81 = true
+            local containers = rawget(acp, "customBuffContainers")
+            if type(containers) == "table" then
+                for _, c in pairs(containers) do
+                    ApplyFrameFxShowSwitchRule(c)
+                end
+            end
+        end
+    end
+end
+
+-- ── Migration 82: Missing Raid Buff Enabled Buffs ──────────────────────
+-- BF:MigrateMissingRaidBuffEnabled
+--
+-- Show Missing Symbiotic Relationship used to be a switch of its own, able
+-- to show the Symbiotic icon on the player frame with Show Missing Raid Buff
+-- OFF. It is now the Druid row's Symbiotic Relationship tick in Enabled
+-- Buffs, and everything sits under the main switch. For every icons table
+-- that had it on, write an explicit Enabled Buffs table that reproduces what
+-- that table showed:
+--   * main switch on  -> every buff at its default, plus Symbiotic ticked;
+--   * main switch off -> main switch turned ON with ONLY Symbiotic ticked,
+--     so no other class's buff starts showing.
+-- Tables with the old switch off need nothing: the defaults already have
+-- Symbiotic unticked. Raw tables throughout (no AceDB defaults behind
+-- them), so `rawget` is the stored value. Idempotent: a table that already
+-- holds missingRaidBuffs is left alone.
+local function ApplyMissingSymbioticRule(icons, defaults)
+    if type(icons) ~= "table" then return end
+    if rawget(icons, "showMissingSymbiotic") ~= true then return end
+    if type(rawget(icons, "missingRaidBuffs")) == "table" then return end
+    local mainOn = rawget(icons, "showMissingRaidBuff") == true
+    local t = {}
+    for k, v in pairs(defaults) do t[k] = (mainOn and v) and true or false end
+    t.DRUID_SYMBIOTIC = true
+    icons.missingRaidBuffs    = t
+    icons.showMissingRaidBuff = true
+end
+BF.ApplyMissingSymbioticRule = ApplyMissingSymbioticRule  -- tests
+
+function BF:MigrateMissingRaidBuffEnabled()
+    local d = self.raidPartyFrameDefaults
+    d = d and d.profile and d.profile.icons and d.profile.icons.missingRaidBuffs
+    if type(d) ~= "table" then return end
+    if self.rpDB and self.rpDB.profiles then
+        for _, rp in pairs(self.rpDB.profiles) do
+            if type(rp) == "table" then
+                ApplyMissingSymbioticRule(rawget(rp, "icons"), d)
+                local lp = rawget(rp, "layouts")
+                local fl = type(lp) == "table" and rawget(lp, "flatLayouts")
+                if type(fl) == "table" then
+                    for _, flat in pairs(fl) do
+                        if type(flat) == "table" then
+                            ApplyMissingSymbioticRule(rawget(flat, "icons"), d)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if self.cfgDB and self.cfgDB.profiles then
+        for _, cp in pairs(self.cfgDB.profiles) do
+            local groups = type(cp) == "table" and rawget(cp, "customFrameGroups")
+            if type(groups) == "table" then
+                for _, grp in pairs(groups) do
+                    local flat = type(grp) == "table" and rawget(grp, "flat")
+                    if type(flat) == "table" then
+                        ApplyMissingSymbioticRule(rawget(flat, "icons"), d)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ── Migration 83: Missing Raid Buff Icon Effect ────────────────────────
+-- BF:MigrateMissingRaidBuffIconEffect
+--
+-- Show Glow (a red marching-ants ring) becomes the Icon Effect dropdown.
+-- Every icons table -- each profile's global section, every Layout's own
+-- copy, every Custom Frame Group's -- that stored Show Glow on gets Icon
+-- Effect = Marching Ants; the Effect Color default is the same red. Raw
+-- reads, idempotent (an existing Icon Effect is left alone).
+local function ApplyMissingGlowRule(icons)
+    if type(icons) ~= "table" then return end
+    if rawget(icons, "missingRaidBuffShowGlow") ~= true then return end
+    if rawget(icons, "missingRaidBuffIconEffect") ~= nil then return end
+    icons.missingRaidBuffIconEffect = "ants"
+end
+BF.ApplyMissingGlowRule = ApplyMissingGlowRule  -- tests
+
+function BF:MigrateMissingRaidBuffIconEffect()
+    if self.rpDB and self.rpDB.profiles then
+        for _, rp in pairs(self.rpDB.profiles) do
+            if type(rp) == "table" then
+                ApplyMissingGlowRule(rawget(rp, "icons"))
+                local lp = rawget(rp, "layouts")
+                local fl = type(lp) == "table" and rawget(lp, "flatLayouts")
+                if type(fl) == "table" then
+                    for _, flat in pairs(fl) do
+                        if type(flat) == "table" then
+                            ApplyMissingGlowRule(rawget(flat, "icons"))
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if self.cfgDB and self.cfgDB.profiles then
+        for _, cp in pairs(self.cfgDB.profiles) do
+            local groups = type(cp) == "table" and rawget(cp, "customFrameGroups")
+            if type(groups) == "table" then
+                for _, grp in pairs(groups) do
+                    local flat = type(grp) == "table" and rawget(grp, "flat")
+                    if type(flat) == "table" then
+                        ApplyMissingGlowRule(rawget(flat, "icons"))
+                    end
+                end
+            end
         end
     end
 end

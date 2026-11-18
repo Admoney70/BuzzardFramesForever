@@ -22,12 +22,207 @@ local _, ns = ...
 
 local UnitIsDeadOrGhost = UnitIsDeadOrGhost
 
+-- R2 (Forever plan 15.2 / 17.1): a single-buff entry's spell-ID MAP and its
+-- signature, from the shared accessor BF:GetSingleBuffSpellSet. Every include
+-- map / claim set below takes the map; slot, group and fx KEYS stay per entry
+-- (ci / singleBuffKey / primary sid). Retail: { [sid] = true } and
+-- tostring(sid), the accessor's cached table -- built once, reused by every
+-- frame. The map is shared: hand it to the engine or read it, never write it.
+-- The fallback only covers a caller holding a sid the accessor does not
+-- vouch for (never on a live path).
+local function SbSet(c, sid)
+    local map, sig = BF:GetSingleBuffSpellSet(c)
+    if map then return map, sig end
+    return { [sid] = true }, tostring(sid)
+end
+-- Merge an entry's IDs into a per-pass set (Retail: dst[sid] = true).
+local function AddSbSet(dst, c, sid)
+    local map = BF:GetSingleBuffSpellSet(c)
+    if map then
+        for id in pairs(map) do dst[id] = true end
+    else
+        dst[sid] = true
+    end
+end
+
 -- v67: file-local _buffsStatus / _buffMatchStatus upvalues removed
 -- (12.1-only). Their readers were the deleted Buffs:GetIcons render pass
 -- and the buffmatch cache hand-off to the deleted buffHighlight indicator;
 -- both grepped to zero references in this file.
 
 local BuffsAndContainers = BF.indicatorPrototype:new("buffsAndContainers")
+
+-- ============================================================
+-- COMBAT STATUS -- a Buff List entry's "Combat Status" condition
+-- (Always / In Combat / Out of Combat).
+--
+-- Storage: c.loadCombat = "in" | "out"; nil is Always, the default, and
+-- stores nothing.
+--
+-- NOT a settings-time condition like Spec / Class. Those are resolved into
+-- Layout-time caches, include sets and parks, and that whole path is refused
+-- in combat -- which is exactly when this state flips. So this one is applied
+-- on the two combat edges:
+--
+--   * The edge listener is subscribed ONLY while some Buff List entry uses a
+--     Combat Status other than Always (BF:RefreshSingleBuffCombatWatch, run
+--     from InvalidateClaimedSpellCache). Nothing is registered otherwise --
+--     the Grid2 load-filter pattern.
+--   * A hidden entry is PARKED, never faded: its candidate set becomes the
+--     match-nothing set, so the engine gives it no button and the flow it
+--     sits in closes up. A transparent button would keep its cell and leave
+--     a gap in the row.
+--   * An entry flowing in a host (the buffs row, a buff container, Big
+--     Defensive) always gets its own group (SingleBuffNeedsOwnGroup /
+--     SingleBuffSharesHostGroup), so its park touches nothing else.
+--     Self-positioned slots, bars and containers ride the indicator's `shown`
+--     term, which already parks a slot and hides a grid container.
+--   * The push is ATTEMPTED in combat. A refused one arms the Layout replay,
+--     which recomputes from the combat state in force when it runs.
+--   * A hidden entry does NOT fall back to the regular buff row.
+--   * The options preview paints dummy auras and never reads this, so it
+--     always shows the entry (owner ruling 2026-11-15).
+--
+-- Per-PLAYER state that lasts a whole fight and flips twice per pull -- not
+-- the seconds-long per-UNIT blink the "NEVER PARK A TRANSIENT STATE" rule in
+-- Auras/ContainerFactory.lua is about. That rule's arm (container
+-- SetEnabled) is not used here; this parks candidate sets only.
+-- ============================================================
+local sbInCombat = false
+-- [ci] = true for an active Buff List entry hidden right now. nil while no
+-- entry uses the condition, so the hot-path test in :Update is one upvalue
+-- nil check. The table is reused across rebuilds.
+local sbCombatHidden
+local sbCombatHiddenTbl = {}
+-- The indices of the entries that use the condition, for the edge walk.
+local sbCombatGated = {}
+local sbCombatEvents = BF:EventOwner("sbCombatStatus")
+
+-- The stored mode, normalized: "in" / "out", or nil for Always. Only a
+-- single-buff entry carries the condition.
+local function SbCombatMode(c)
+    local m = type(c) == "table" and c.singleBuff and c.loadCombat
+    if m == "in" or m == "out" then return m end
+    return nil
+end
+
+-- Read by the frame-effect projection (GetContainerBuffConfig): a spell's
+-- frame effects follow their entry's Combat Status too.
+BF.GetSingleBuffCombatMode = SbCombatMode
+
+local function SbCombatOK(c)
+    local m = SbCombatMode(c)
+    if m == "in" then return sbInCombat end
+    if m == "out" then return not sbInCombat end
+    return true
+end
+
+-- Re-index the gated entries and which of them the current state hides.
+-- Returns true when any entry uses the condition.
+local function RebuildSbCombatHidden()
+    wipe(sbCombatGated)
+    wipe(sbCombatHiddenTbl)
+    for ci, c in ipairs(BF:GetActiveCustomBuffContainers() or {}) do
+        if SbCombatMode(c) then
+            sbCombatGated[#sbCombatGated + 1] = ci
+            if not SbCombatOK(c) then sbCombatHiddenTbl[ci] = true end
+        end
+    end
+    local any = #sbCombatGated > 0
+    sbCombatHidden = any and sbCombatHiddenTbl or nil
+    return any
+end
+
+-- Layout records one of these per gated flow group (EmitSingleBuffHostGroups),
+-- keyed by group key, on parent._bf_sbCombatGroups. The edge re-parks from it
+-- without a Layout. `hostDormant` is the host's own park; `cand` the entry's
+-- real include set.
+local function NoteSbCombatGroup(parent, gk, featureKey, hostDormant, c, map)
+    local cg = parent._bf_sbCombatGroups
+    if not SbCombatMode(c) then
+        if cg then cg[gk] = nil end
+        return
+    end
+    if not cg then cg = {}; parent._bf_sbCombatGroups = cg end
+    local rec = cg[gk]
+    if not rec then rec = {}; cg[gk] = rec end
+    rec.fk, rec.hostDormant, rec.c = featureKey, hostDormant and true or false, c
+    if not (rec.cand and rec.cand.includeSpellIDs == map) then
+        rec.cand = { includeSpellIDs = map }
+    end
+end
+
+local function ApplySbGroupCombatPark(frame, gk, rec)
+    local fk = rec.fk
+    local c = frame._bf_auraContainers and frame._bf_auraContainers[fk]
+    if not (c and c._bf_groupSpecs and c._bf_groupSpecs[gk]) then return end
+    local park = rec.hostDormant or not SbCombatOK(rec.c)
+    local dg = c._bf_dormantGroups
+    if park then
+        BF:SetAuraGridGroupDormant(frame, fk, gk, true)
+    elseif dg and dg[gk] then
+        -- Unpark with ONE setter: the real include set replaces the
+        -- match-nothing set directly. SetAuraGridGroupDormant(false) clears the
+        -- set to {} and needs a second write to narrow it again, and a refusal
+        -- between the two would leave the group live on its bare caster-scope
+        -- filter -- every helpful aura on the unit.
+        if pcall(c.SetAuraGroupCandidateFilters, c, gk, rec.cand) then
+            dg[gk] = false
+            -- Candidate changes do not re-evaluate existing assignments.
+            pcall(c.UpdateAllAuras, c)
+        end
+    end
+    dg = c._bf_dormantGroups
+    if ((dg and dg[gk]) or false) ~= park then
+        BF:NoteAuraLayoutRestricted(frame)
+    end
+end
+
+local function OnSbCombatEdge(_, ev)
+    sbInCombat = (ev == "PLAYER_REGEN_DISABLED")
+    if not RebuildSbCombatHidden() then return end
+    for frame in next, BF.activatedFrames do
+        if not frame._isPreviewFrame then
+            local cg = frame._bf_sbCombatGroups
+            if cg then
+                for gk, rec in next, cg do ApplySbGroupCombatPark(frame, gk, rec) end
+            end
+            -- A self-positioned bar's empty-state art is plain addon art:
+            -- shown only when its last Layout wanted it, and the entry is not
+            -- hidden by its Combat Status.
+            local pool = frame._bf_sbEmpty
+            if pool then
+                for i = 1, #sbCombatGated do
+                    local ci = sbCombatGated[i]
+                    local r = pool[ci]
+                    if r and r._bf_layoutWant then
+                        local want = not sbCombatHidden[ci]
+                        if r.holder:IsShown() ~= want then r.holder:SetShown(want) end
+                    end
+                end
+            end
+        end
+    end
+    -- Slots, bars and self-positioned containers: their `shown` term reads
+    -- sbCombatHidden. Deferred (mark dirty, flushed next frame), the same as
+    -- every other render pass.
+    BuffsAndContainers:UpdateAllFrames()
+end
+
+-- Settings time: subscribe while an entry uses the condition, unsubscribe
+-- when none does, and re-index. Also called on every container edit.
+function BF:RefreshSingleBuffCombatWatch()
+    local subscribed = sbCombatEvents:IsSubscribed("PLAYER_REGEN_DISABLED")
+    if not subscribed then sbInCombat = InCombatLockdown() and true or false end
+    if RebuildSbCombatHidden() then
+        if not subscribed then
+            sbCombatEvents:Sub("PLAYER_REGEN_DISABLED", OnSbCombatEdge, "unitless")
+            sbCombatEvents:Sub("PLAYER_REGEN_ENABLED",  OnSbCombatEdge, "unitless")
+        end
+    elseif subscribed then
+        sbCombatEvents:UnsubAll()
+    end
+end
 
 -- Per-indicator Create: build the buff icon pool.
 -- Custom-container icons (parent.SF_CustomContainerIcons) are still
@@ -147,11 +342,44 @@ local function EnsureSingleBuffHostMemo(ac, groupTypeKey)
             -- rendered size and the wrap budget have to be derived by the SAME
             -- rule or the row wraps against a number nothing renders at.
             -- It still counts for _sbHostAny: it is anchored, it renders.
-            if c.singleBuffCustomized ~= false then
+            --
+            -- Duration Bar plan §5.1: an entry with Show Icon OFF and no text
+            -- in its place builds NO group (CollectSingleBuffFlow), so it takes
+            -- no space and costs the line nothing -- skipped for the SIZE answer
+            -- by the same rendered-size rule. It still counts for _sbHostAny:
+            -- it is anchored, and on Big Defensive its claim has to reach `bd`'s
+            -- exclude list, which needs the collection to run. A "text" entry
+            -- is measured as usual -- the resolver answers its Text Area Size.
+            -- Display-tab redesign: an UNCUSTOMIZED "text" entry is measured
+            -- too -- Text in place (and its Text Area Size) no longer needs
+            -- Customize Buff, so it has a size of its own (SingleBuffOwnSize).
+            local iconMode = BF.GetSingleBuffIconMode
+                and BF.GetSingleBuffIconMode(c, groupTypeKey, ac)
+            if iconMode ~= "none"
+               and (c.singleBuffCustomized ~= false or iconMode == "text") then
                 local eSize = BF:ResolveContainerGeometry(c, groupTypeKey, ac)
                 if eSize and eSize > 0 and eSize > (_sbSizeByHost[hk] or 0) then
                     _sbSizeByHost[hk] = eSize
                 end
+            end
+        end
+        -- Duration Bar plan §5.6 (Stage 4): a flow-hosted BAR makes its host
+        -- "hosted" (membership -- BF.BigDefHostNeedsRelayout and the bigDef
+        -- early-out read it), but it NEVER feeds _sbSizeByHost: the host's line
+        -- budget is base + ICON-entry slack only, and the bar's full-line cell
+        -- is derived from that final budget (ContainerFactory SpellBarFlowCell)
+        -- -- feeding it back would make the budget depend on itself. The anchor
+        -- is read raw (tier, then entry), the same fallback ResolveSpellBarSpec
+        -- applies; conservative like the rest of this walk.
+        local bsid = c.singleBuff and BF:GetSingleBuffSpellID(c)
+        local bset, bentry
+        if bsid and BF.GetSpellBar then bset, bentry = BF.GetSpellBar(bsid, groupTypeKey, c) end
+        if bset then
+            local v = bset.anchorPoint
+            if v == nil and bentry and bentry ~= bset then v = bentry.anchorPoint end
+            local bh = BF.IsFlowAnchorValue(v) and BF:GetFlowHostForValue(v)
+            if bh then
+                _sbHostAny[(bh.kind == "bfc") and ("bfc" .. bh.ci) or bh.kind] = true
             end
         end
     end
@@ -174,6 +402,37 @@ local function HostHasAnchoredSingleBuffs(ac, groupTypeKey, hostKey)
     if not ac then return false end
     EnsureSingleBuffHostMemo(ac, groupTypeKey)
     return _sbHostAny[hostKey] == true
+end
+
+-- Does this frame's Big Defensive container need its LINE BUDGET re-derived
+-- when a single buff's size can have moved? For the light option refreshes
+-- (BF:RefreshAllCustomContainers(true), BF:RefreshBuffsOnly), which lay out the
+-- buffs indicator but not Big Defensive: an anchored entry's Icon Size / Text
+-- Area Size / inherited Buffs size feeds bigDef's lineSizeSlack, and only
+-- BigDefIcons:Layout applies that geometry (BigDefContainerSpecs ->
+-- MaxSingleBuffSizeFor). The SAME gate BF.ApplyBigDefAnchoredGroups uses:
+--   * the container must exist (a missing one is Big Defensive off, and
+--     BigDefIcons:Layout would otherwise CREATE it);
+--   * _bf_sbHosted -- it has held an sb group, so its slack may need to
+--     SHRINK back now that the entry left or got smaller;
+--   * or an entry is anchored to it right now (the memo, which the buffs
+--     Layout just warmed for this frame).
+-- Neither true is the overwhelmingly common profile: no extra Layout at all.
+-- Settings time only; never reached per aura.
+function BF.BigDefHostNeedsRelayout(parent, ac, groupTypeKey)
+    local cc = parent and parent._bf_auraContainers and parent._bf_auraContainers.bigDef
+    if not cc then return false end
+    if cc._bf_sbHosted then return true end
+    -- Stage 5: the frame's static push moved since Big Defensive was last
+    -- anchored (an empty bar or push toggle edit, a bar resized or moved).
+    if BF.SingleBuffBarPushSig and BF.SingleBuffBarPushSig(parent) ~= cc._bf_pushSig then
+        return true
+    end
+    ac = ac or BF:GetAuraCacheForFrame(parent)
+    if groupTypeKey == nil and BF.ResolveGroupTypeKey then
+        groupTypeKey = BF:ResolveGroupTypeKey(parent)
+    end
+    return HostHasAnchoredSingleBuffs(ac, groupTypeKey, "bigDef")
 end
 
 -- Stamp geo.lineSizeSlack for one host. Same arithmetic the v65 buffs arm did
@@ -402,9 +661,23 @@ local function ApplyContainerDuration(spec, c, groupTypeKey, ac, kind)
     return spec
 end
 
+-- Does this entry's icon slot/group take the DERIVED spec (its own look)
+-- rather than the plain container one? A customized entry with a store, as
+-- before -- and, since the Display-tab redesign, an UNCUSTOMIZED entry whose
+-- Show Buff Icon is off: Show Icon / Text in place are not icon
+-- customizations, and DeriveSpellButtonSpec is the one place the "text" /
+-- "none" spec is built (every icon getter reads nil for that entry, so
+-- nothing else of the derived look applies). An uncustomized entry with its
+-- icon on keeps the plain spec, unchanged.
+local function SingleBuffUsesDerivedSpec(c, sbSid)
+    if not sbSid then return false end
+    if BF.GetSingleBuffVisualRoot and BF.GetSingleBuffVisualRoot(c) then return true end
+    return (BF.GetSpellIconHidden and BF.GetSpellIconHidden(sbSid, c)) and true or false
+end
+
 local function SingleBuffSpec(parent, c, size)
     local sbSid = BF.GetSingleBuffSpellID and BF:GetSingleBuffSpellID(c)
-    if sbSid and BF.GetSingleBuffVisualRoot and BF.GetSingleBuffVisualRoot(c) then
+    if SingleBuffUsesDerivedSpec(c, sbSid) then
         return DeriveSpellButtonSpec(parent, size, sbSid, c)
     end
     return nil
@@ -414,11 +687,20 @@ end
 -- exact expression :Update uses to decide whether to SHOW the container
 -- (ac.showBuffs plus the CFG header's module toggle), so creation and
 -- visibility can never disagree.
+--
+-- Review fix A2: the module-off half is its own predicate, shared by every
+-- reader -- this, :Update's fill terms, the empty bar's art and the static
+-- push -- so a CFG whose Buffs module is off hides the empty art (and stops
+-- pushing displays aside) under exactly the term that hides the fill.
+local function BuffsModuleOff(parent)
+    local ph = parent._bf_parentHeader or parent:GetParent()
+    return (ph and ph.isCustomFrame and ph.moduleShowBuffs == false) and true or false
+end
+BF.BuffsModuleOffForFrame = BuffsModuleOff
+
 local function BuffsShownFor(parent)
     local ac = BF:GetAuraCacheForFrame(parent)
-    local ph = parent._bf_parentHeader or parent:GetParent()
-    local moduleOff = ph and ph.isCustomFrame and ph.moduleShowBuffs == false
-    return (ac.showBuffs ~= false) and not moduleOff
+    return (ac.showBuffs ~= false) and not BuffsModuleOff(parent)
 end
 BF.BuffsShownForFrame = BuffsShownFor
 
@@ -495,9 +777,13 @@ local function AnchorSingleBuffSlotButton(parent, btn, geo)
     local anchor = (geo.anchor and geo.anchor ~= "") and geo.anchor or "CENTER"
     local target = BF.AuraLiftAnchorFrame(parent,
         BF:GetAuraCacheForFrame(parent), anchor) or parent
+    -- Stage 5: the static push of the frame's empty bars, against the same
+    -- target (BF.SingleBuffBarPushFor). SingleBuffGeoSig carries the same sum.
+    local px, py = 0, 0
+    if BF.SingleBuffBarPushFor then px, py = BF.SingleBuffBarPushFor(parent, anchor, target) end
     BF:SlotCall("button:ClearAllPoints", btn.ClearAllPoints, btn)
     return BF:SlotCall("button:SetPoint", btn.SetPoint, btn, anchor, target,
-        anchor, geo.offsetX or 0, geo.offsetY or 0) and true or false
+        anchor, (geo.offsetX or 0) + px, (geo.offsetY or 0) + py) and true or false
 end
 
 -- 2026-09-11 (restricted recreate, plan §3.1 sbc row): the geometry a slot
@@ -510,8 +796,12 @@ local function SingleBuffGeoSig(parent, geo)
     local anchor = (geo.anchor and geo.anchor ~= "") and geo.anchor or "CENTER"
     local target = BF.AuraLiftAnchorFrame(parent,
         BF:GetAuraCacheForFrame(parent), anchor) or parent
-    return tostring(geo.size) .. "|" .. anchor .. "|" .. tostring(geo.offsetX or 0)
-        .. "|" .. tostring(geo.offsetY or 0) .. "|" .. tostring(target)
+    -- Stage 5: the pushed offsets, so a push change re-anchors (Layout and the
+    -- power-bar re-place) or, inside a key, asks for a rebuilt slot.
+    local px, py = 0, 0
+    if BF.SingleBuffBarPushFor then px, py = BF.SingleBuffBarPushFor(parent, anchor, target) end
+    return tostring(geo.size) .. "|" .. anchor .. "|" .. tostring((geo.offsetX or 0) + px)
+        .. "|" .. tostring((geo.offsetY or 0) + py) .. "|" .. tostring(target)
 end
 
 local function AnchorSingleBuffSlot(parent, s, geo)
@@ -538,6 +828,7 @@ local function DeriveSingleBuffSlotSpec(parent, c, geo, ac, groupTypeKey)
 end
 
 local function EnsureSingleBuffSlot(parent, ci, c, sid, ac, groupTypeKey)
+    local sbMap, sbSig = SbSet(c, sid)
     local geo = ContainerGeo(c, ac, groupTypeKey)
     local bspec = DeriveSingleBuffSlotSpec(parent, c, geo, ac, groupTypeKey)
     -- v88h: set by the init callback below, read after it returns. The record
@@ -557,7 +848,9 @@ local function EnsureSingleBuffSlot(parent, ci, c, sid, ac, groupTypeKey)
         -- Include set from the START (same reason the fx slots do): if a
         -- post-creation setter were ever denied, a bare entry-scope filter
         -- would match every qualifying aura instead of this one spell.
-        candidateFilters = { includeSpellIDs = { [sid] = true } },
+        -- R2: the entry's ID map (every rank on Forever; { [sid] = true } on
+        -- Retail).
+        candidateFilters = { includeSpellIDs = sbMap },
         -- v88: this slot's initButton IS the full InitAuraButton walk, so its
         -- button carries the `_bf_initDone` completion marker and the slot can
         -- be probed for a half-finished styling walk (BF:AuraSlotStylingState).
@@ -581,7 +874,9 @@ local function EnsureSingleBuffSlot(parent, ci, c, sid, ac, groupTypeKey)
     -- replay so one is guaranteed to come once combat drops. That is the whole
     -- point -- nothing else to do here.
     if s then
-        s._bf_sbSid = sid  -- candidate-set change guard for the Layout arm
+        -- Candidate-set change guard for the Layout arm. R2: the ID-map
+        -- SIGNATURE, so a multi-ID entry is not re-stamped every pass.
+        s._bf_sbSid = sbSig
         s.anchored  = initAnchored
         -- Baked geometry (plan §3.1): what the init window placed the button
         -- with. The Layout arm compares against it inside a key.
@@ -666,6 +961,669 @@ local function RepairSingleBuffSlot(parent, ci, c, ac, groupTypeKey)
         end
     end
     return false
+end
+
+-- ── Duration Bar plan §5.5 (Stage 3): SELF-POSITIONED BAR SLOT sbb<ci> ────
+-- An entry's bar is its OWN slot on the shared slot host, independent of the
+-- entry's icon (which is sbc<ci>, an sb group in a flow host, or nothing at
+-- all): the Grid2 IndicatorBarAura model, where the slot button IS the bar.
+-- Same creation path and the same v88h init-window rule as sbc<ci> --
+-- regions, binding, size and anchor all land inside initButton -- and the same
+-- maintenance shape (park / unpark / filter / candidates / live geometry and
+-- restyle, out of combat). Flow-anchored bars (Buffs / Big Defensive /
+-- container) are Stage 4 and resolve to "no bar" here. The /bf sbslots kill
+-- switch does not apply: a bar is always a slot.
+--
+-- (sid, bar spec) for this frame's Layout, or nil when the entry shows no
+-- self-positioned bar. BF.ResolveSpellBarSpec is the one shared derivation
+-- (AuraCustomizationHelpers.lua) -- the preview reads the same one.
+local function SingleBuffBarSpec(parent, c, groupTypeKey)
+    local sid = BF:GetSingleBuffSpellID(c)
+    if not sid or not BF.GetSpellBar then return nil end
+    local bset, bentry = BF.GetSpellBar(sid, groupTypeKey, c)
+    if not bset then return nil end
+    local bs = BF.ResolveSpellBarSpec(parent, bset, bentry)
+    if not bs or bs.flow then return nil end
+    return sid, bs
+end
+
+-- The frame a bar anchors to. A bar sits INSIDE the frame border, never on
+-- it (owner 2026-10-12): its target is parent.container -- the health-area
+-- rect Container:Layout anchors inset by the border (and above a shown power
+-- bar), the same rect whose _bf_contentW/H the bar's % size is computed
+-- from. The aurasAbovePowerBar lift (BF.AuraLiftAnchorFrame) still applies
+-- for a bottom anchor while the power bar is shown, exactly as for icons --
+-- it resolves to the same parent.container, so it no longer moves a bar. BARS
+-- ONLY: icon slots (sbc<ci>) keep AnchorSingleBuffSlotButton's outer-edge
+-- target. The CastBar precedent: Indicators/CastBar.lua anchors its
+-- fraction-of-content-rect bar to `parent.container or parent` too.
+local function SingleBuffBarTarget(parent, anchor)
+    return BF.AuraLiftAnchorFrame(parent, BF:GetAuraCacheForFrame(parent), anchor)
+        or parent.container or parent
+end
+-- The options preview (_PaintPreviewSingleBuffBars, DummyAuras.lua) anchors
+-- its bars through this same function, so live and preview share one rule.
+BF.SingleBuffBarTarget = SingleBuffBarTarget
+
+-- ApplyBuffFilters' per-container `hidden` for this Layout, as one function so
+-- the sbb maintenance, the Stage 5 empty bar and the Stage 5 push resolve the
+-- SAME answer: the global Enabled gate (never set on single buffs), the
+-- per-Layout "Enabled for this Layout" (showForGroupType, through the two-gate
+-- BF:IsContainerPerLayoutActive), and a single buff's Spec condition / Hide
+-- display type (BF:IsSingleBuffVisibleForSpec). Settings-time only.
+local function ContainerHiddenOnLayout(c, groupTypeKey)
+    local hidden = not c.singleBuff and c.enabled == false
+    if c.groupSettings and BF:IsContainerPerLayoutActive(groupTypeKey, c) then
+        local gs = c.groupSettings[groupTypeKey]
+        if gs and gs.showForGroupType == false then hidden = true end
+    end
+    if not hidden and not BF:IsSingleBuffVisibleForSpec(c) then
+        hidden = true
+    end
+    return hidden
+end
+
+-- ── Duration Bar plan §5.6 (Stage 5): THE STATIC PUSH ─────────────────────
+-- A frame-positioned bar with Show Empty Bar When Missing on is ALWAYS drawn
+-- (its empty state is frame art), so Lua knows it is there and the aura
+-- displays on its edge can be moved clear of it at config time -- the power-
+-- bar lift's model, as one more offset in the same anchor resolution.
+--
+-- Per frame, from the bars ACTIVE on it (the sbb park terms: not hidden on
+-- this Layout, relevant, Show Bar on and resolved for this Layout, not flow-
+-- hosted) whose empty bar is on and whose edge toggle is on (bs.pushEdge),
+-- the push of each edge is the OUTERMOST far edge among them, measured inward
+-- from the content rect's edge (parent.container -- every bar anchors to it,
+-- SingleBuffBarTarget). bs.offsetX/Y already carry the half-pixel border edge
+-- (BF.ResolveSpellBarSpec), so:
+--   BOTTOM  far = offsetY + h        (bar near edge is offsetY above the edge)
+--   TOP     far = -offsetY + h       (offsetY is negative going down)
+--   LEFT    far = offsetX + w
+--   RIGHT   far = -offsetX + w
+-- clamped at 0 (a bar pushed outside the rect clears nothing). Bars overlap
+-- unless offset (owner ruling), so the outermost one decides.
+--
+-- Two reference spaces, because a display anchors to the lift target
+-- (parent.container) or to the unit frame:
+--   container-relative  p.c = the far edges above;
+--   frame-relative      p.f = p.c + the container's inset from the frame on
+--                       that side: `inset` (Container:Layout's border inset),
+--                       plus the power strip (effectivePowerH) at the BOTTOM.
+-- So a display lands exactly on the bar's far edge whichever target it uses,
+-- and the push STACKS with the power-bar lift: a lifted bottom grid is
+-- already above the power strip and moves up by the bar; an unlifted one
+-- moves past both.
+--
+-- Cached on the frame (parent._bf_sbPush, signature _bf_sbPushSig) and
+-- invalidated at the top of every indicator Layout that resolves these
+-- anchors (Buffs, Big Defensive, Debuffs) and on a power-bar flip; computed
+-- lazily on first use after that. Layout time only.
+local _pushScratch = { B = 0, T = 0, L = 0, R = 0 }
+function BF.ComputeSingleBuffBarPush(parent, groupTypeKey, items)
+    parent._bf_sbPush, parent._bf_sbPushSig = nil, nil
+    parent._bf_sbPushValid = true
+    -- Review fix A2: no bar is drawn while the Buffs module is off (the
+    -- same term that hides the fill and the empty art), so none pushes.
+    if BuffsModuleOff(parent) then return end
+    local containers = BF:GetActiveCustomBuffContainers()
+    if not containers then return end
+    local acc = _pushScratch
+    acc.B, acc.T, acc.L, acc.R = 0, 0, 0, 0
+    local any = false
+    local n = items and #items or #containers
+    for i = 1, n do
+        local c, ci
+        if items then
+            -- The options preview: exactly the bars it draws (its own entry
+            -- selection), so a preview row is pushed by what is on screen.
+            c, ci = items[i].c, items[i].ci
+        else
+            ci = i
+            c = containers[i]
+            if not (c and c.singleBuff) or ContainerHiddenOnLayout(c, groupTypeKey)
+               or not BF:IsContainerCreationRelevant("buff", ci) then
+                c = nil
+            end
+        end
+        if c then
+            local _, bs = SingleBuffBarSpec(parent, c, groupTypeKey)
+            local e = bs and bs.pushEdge
+            if e and bs.w and bs.h then
+                local far
+                if e == "BOTTOM" then far = (bs.offsetY or 0) + bs.h
+                elseif e == "TOP" then far = -(bs.offsetY or 0) + bs.h
+                elseif e == "LEFT" then far = (bs.offsetX or 0) + bs.w
+                else far = -(bs.offsetX or 0) + bs.w end
+                local k = (e == "BOTTOM" and "B") or (e == "TOP" and "T")
+                    or (e == "LEFT" and "L") or "R"
+                if far > acc[k] then acc[k] = far; any = true end
+            end
+        end
+    end
+    if not any then return end
+    local _, _, inset, effPowerH = BF.ComputeFrameContentGeometry(parent)
+    inset, effPowerH = inset or 0, effPowerH or 0
+    local cB, cT, cL, cR = acc.B, acc.T, acc.L, acc.R
+    parent._bf_sbPush = {
+        c = { B = cB, T = cT, L = cL, R = cR },
+        f = {
+            B = (cB > 0) and (cB + inset + effPowerH) or 0,
+            T = (cT > 0) and (cT + inset) or 0,
+            L = (cL > 0) and (cL + inset) or 0,
+            R = (cR > 0) and (cR + inset) or 0,
+        },
+    }
+    parent._bf_sbPushSig = cB .. "|" .. cT .. "|" .. cL .. "|" .. cR
+        .. "|" .. inset .. "|" .. effPowerH
+end
+
+-- Drop a frame's push so the next reader re-derives it. Called at the top of
+-- each anchor-resolving indicator Layout and by the power-bar re-anchor hook.
+function BF.InvalidateSingleBuffBarPush(parent)
+    if parent then parent._bf_sbPushValid = nil end
+end
+
+-- The push (dx, dy) for a display anchored at `anchor` to `target`, in that
+-- target's space (container-relative when target is the content rect,
+-- frame-relative when it is the unit frame; anything else is not pushed).
+-- Edge matching is the lift's isBottomAnchor rule, extended to all four
+-- sides: an anchor containing BOTTOM / TOP / LEFT / RIGHT takes that edge's
+-- push, so a CORNER anchor takes BOTH of its edges' pushes when bars on both
+-- apply (BOTTOMLEFT: up by the bottom push and right by the left push); a
+-- CENTER-axis anchor takes none on that axis.
+function BF.SingleBuffBarPushFor(frame, anchor, target)
+    if not frame or type(anchor) ~= "string" then return 0, 0 end
+    if not frame._bf_sbPushValid then
+        BF.ComputeSingleBuffBarPush(frame,
+            BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(frame))
+    end
+    local p = frame._bf_sbPush
+    if not p then return 0, 0 end
+    local base
+    if target == frame then base = p.f
+    elseif target == frame.container then base = p.c end
+    if not base then return 0, 0 end
+    local dx, dy = 0, 0
+    if anchor:find("BOTTOM") then dy = dy + base.B
+    elseif anchor:find("TOP") then dy = dy - base.T end
+    if anchor:find("LEFT") then dx = dx + base.L
+    elseif anchor:find("RIGHT") then dx = dx - base.R end
+    return dx, dy
+end
+
+-- The frame's current push signature (computing it if stale), for the light
+-- refresh gate that decides whether Big Defensive needs a Layout.
+function BF.SingleBuffBarPushSig(frame)
+    if frame and not frame._bf_sbPushValid then
+        BF.ComputeSingleBuffBarPush(frame,
+            BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(frame))
+    end
+    return frame and frame._bf_sbPushSig
+end
+
+-- The bar's geometry as one string -- SingleBuffGeoSig's twin with the bar's
+-- two dimensions in place of the icon's one size, plus the target identity
+-- SingleBuffBarTarget resolves. Stamped where the geometry LANDS; the
+-- maintenance arm compares it to skip a no-op re-anchor, and the in-key
+-- compare to decide a rebuild.
+local function SingleBuffBarGeoSig(parent, bs)
+    local anchor = (bs.anchor and bs.anchor ~= "") and bs.anchor or "CENTER"
+    local target = SingleBuffBarTarget(parent, anchor)
+    return tostring(bs.w) .. "x" .. tostring(bs.h) .. "|" .. anchor .. "|"
+        .. tostring(bs.offsetX or 0) .. "|" .. tostring(bs.offsetY or 0)
+        .. "|" .. tostring(target)
+end
+
+-- Size + anchor, the pair every geometry site applies. Returns true only when
+-- BOTH landed (a denied write leaves the sig stale, so the next pass retries).
+-- The anchor is AnchorSingleBuffSlotButton's write against the bar's own
+-- target (SingleBuffBarTarget, inside the border). No size when the content
+-- rect is unknown (bs.w nil).
+local function PlaceSingleBuffBarButton(parent, btn, bs, label)
+    local sized = true
+    if bs.w and bs.h then
+        sized = BF:SlotCall(label, btn.SetSize, btn, bs.w, bs.h) and true or false
+    end
+    local anchor = (bs.anchor and bs.anchor ~= "") and bs.anchor or "CENTER"
+    local target = SingleBuffBarTarget(parent, anchor)
+    BF:SlotCall("button:ClearAllPoints", btn.ClearAllPoints, btn)
+    local anchored = BF:SlotCall("button:SetPoint", btn.SetPoint, btn, anchor,
+        target, anchor, bs.offsetX or 0, bs.offsetY or 0) and true or false
+    return sized and anchored, anchored
+end
+
+local function EnsureSingleBuffBarSlot(parent, ci, c, sid, bs)
+    local sbMap, sbSig = SbSet(c, sid)
+    -- Set by the init callback, read after it returns (the record does not
+    -- exist while initializeFrame runs) -- EnsureSingleBuffSlot's pattern.
+    local initPlaced, initAnchored = false, false
+    local s = BF:EnsureAuraSlotVisual(parent, "sbb" .. ci, {
+        -- Same level as sbc<ci> (frame +223, +1 for the slot button): above
+        -- the name/status text band, like every aura display.
+        frameLevelOffset = 223,
+        filter = ContainerAuraFilter(c),
+        -- Include set from the START (see EnsureSingleBuffSlot). R2: ID map.
+        candidateFilters = { includeSpellIDs = sbMap },
+        -- fullInit: the bar's init (BF.InitSpellBarButton) stamps the v88
+        -- completion marker `_bf_initDone` LAST, exactly as InitAuraButton
+        -- does for sbc<ci>. That is what the commit gate's health bit, the v88
+        -- repair arm (RepairSingleBuffBarSlot) and the restricted-recreate
+        -- success test read. An interrupted init is caught by the commit gate
+        -- (initOK == false -> retired, retried).
+        fullInit = true,
+        initButton = function(btn)
+            BF.InitSpellBarButton(btn, bs)
+            initPlaced, initAnchored = PlaceSingleBuffBarButton(parent, btn, bs,
+                "bar:SetSize(init)")
+        end,
+    })
+    -- nil = creation failed or was refused; nothing is recorded, so the next
+    -- Layout (or the regen replay EnsureAuraSlotVisual queues) rebuilds.
+    if s then
+        s._bf_sbSid = sbSig  -- R2: ID-map signature (change guard)
+        s.anchored  = initAnchored
+        local btn = s._bf_slotButton
+        local placed = initPlaced
+        if btn and not initAnchored then
+            -- The lazy-initializeFrame cover, as in EnsureSingleBuffSlot.
+            placed = PlaceSingleBuffBarButton(parent, btn, bs, "bar:SetSize(create)")
+            if placed then s.anchored = true end
+        end
+        -- Only a geometry that LANDED is baked; otherwise the maintenance arm
+        -- sees a mismatch and re-applies it.
+        s._bf_sbGeoSig = placed and SingleBuffBarGeoSig(parent, bs) or nil
+    end
+    return s
+end
+
+-- v88 REPAIR ARM for a bar slot whose button exists but whose init walk did
+-- not complete -- RepairSingleBuffSlot's twin, same states and same outcomes
+-- (BF:AuraSlotStylingState, which reads the bar's own walk-started marker
+-- `_bf_barRegions` beside InitAuraButton's `_bf_icon`):
+--   "init"    the walk never started: run it now (nothing built, so nothing
+--             can double-build or double-bind), then size + anchor;
+--   "discard" half-built: inside a key, ask for a rebuilt slot (the
+--             recreate executor retires and rebuilds on its own budget);
+--             otherwise retire it (DiscardAuraSlotVisual) and return true so
+--             the caller re-creates it in the same pass.
+-- Out of combat only, by construction: the probe answers nil (wait) while
+-- restricted outside the recreate window. Steady-state cost is the caller's
+-- one `s.healthy` read -- nothing here runs on a working slot.
+local function RepairSingleBuffBarSlot(parent, ci, s, bs)
+    local skey = "sbb" .. ci
+    local state = BF.AuraSlotStylingState and BF:AuraSlotStylingState(parent, skey)
+    if not state or state == "ok" then return false end
+    local btn = s and s._bf_slotButton
+    if state == "init" then
+        if BF.InitSpellBarButton and pcall(BF.InitSpellBarButton, btn, bs) then
+            if btn._bf_initDone then
+                local placed, anchored = PlaceSingleBuffBarButton(parent, btn, bs,
+                    "bar:SetSize(repair)")
+                if anchored then s.anchored = true end
+                if placed then s._bf_sbGeoSig = SingleBuffBarGeoSig(parent, bs) end
+                -- Repaired: the health bit makes this arm one boolean read
+                -- from here on.
+                s.healthy = true
+                return false
+            end
+        end
+        -- Half-built this time: discard below so the next pass gets a clean
+        -- button.
+        state = "discard"
+    end
+    if state == "discard" and BF:IsAuraRecreateWindow() then
+        BF:RequestAuraRecreate(parent, "slot", skey, "sbbRepair")
+        return false
+    end
+    if state == "discard" then
+        if BF.DiscardAuraSlotVisual and BF:DiscardAuraSlotVisual(parent, skey) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Per-Layout maintenance of an EXISTING sbb<ci> (creation is
+-- EnsureBuffContainers'). The park terms mirror sbc<ci>'s -- `hidden` (the
+-- per-Layout Enabled flag, the Spec condition, the Hide display type, from
+-- ApplyBuffFilters), no spell, not relevant to this spec -- plus the bar's
+-- own: no bar resolved for this Layout (Show Bar off, Default display type)
+-- or a flow-anchored bar (Stage 4). Every engine call below is change-guarded
+-- inside the slot helpers; the size / anchor / restyle writes are skipped
+-- while auras are restricted (the button is forbidden to tainted code then --
+-- the v88h ledger) and land on the regen-replayed Layout.
+local function MaintainSingleBuffBarSlot(parent, ci, c, hidden, groupTypeKey)
+    local skey = "sbb" .. ci
+    local s = parent._bf_auraSlots and parent._bf_auraSlots[skey]
+    if not s then return end
+    local sid, bs
+    if not hidden then sid, bs = SingleBuffBarSpec(parent, c, groupTypeKey) end
+    if (not bs) or not BF:IsContainerCreationRelevant("buff", ci) then
+        BF:SetAuraSlotVisualDormant(parent, skey, true)
+        return
+    end
+    -- v88 (sbc's arm, mirrored): before maintaining the slot, make sure it is
+    -- WORTH maintaining. Only for a slot about to be used -- a parked one is
+    -- not repaired (a rebuild would burn the attempt budget on a button
+    -- nothing shows). One boolean read on a working slot.
+    if not s.healthy and RepairSingleBuffBarSlot(parent, ci, s, bs) then
+        EnsureSingleBuffBarSlot(parent, ci, c, sid, bs)
+        s = parent._bf_auraSlots and parent._bf_auraSlots[skey]
+        if not s then return end
+    end
+    BF:SetAuraSlotVisualFilter(parent, skey, ContainerAuraFilter(c))
+    local sbMap, sbSig = SbSet(c, sid)  -- R2: compare the map's signature
+    if s._bf_sbSid ~= sbSig then
+        s._bf_sbSid = sbSig
+        BF:SetAuraSlotCandidates(parent, skey, { includeSpellIDs = sbMap })
+    end
+    BF:SetAuraSlotVisualDormant(parent, skey, false)
+    if BF:IsAuraCreationRestricted() then
+        if BF:IsAuraRecreateWindow() then
+            -- 2026-09-11 restricted recreate (plan §3.1), the sbc row mirrored:
+            -- inside a key every write below is denied, so compare WITHOUT
+            -- writing and ask for a rebuilt slot on a mismatch -- the new
+            -- button is born with this geometry, look and binding in its init
+            -- window. The legs are named apart (sbb-geo / sbb-spec), and the
+            -- sigs kept on the record, as sbc does.
+            local geoNow = SingleBuffBarGeoSig(parent, bs)
+            local miss
+            if s._bf_sbGeoSig ~= geoNow then miss = "sbb-geo" end
+            local btn = s._bf_slotButton
+            if not miss and btn and btn._bf_barRegions and BF.SpellBarStyleSig
+               and (btn._bf_barStyleSig ~= BF.SpellBarStyleSig(bs)
+                    or btn._bf_barBindKey ~= BF.SpellBarBindKey(bs)) then
+                miss = "sbb-spec"
+            end
+            if miss then
+                s._bf_sbMissWas, s._bf_sbMissNow = s._bf_sbGeoSig, geoNow
+                BF:RequestAuraRecreate(parent, "slot", skey, miss)
+            end
+        end
+        return
+    end
+    local btn = s._bf_slotButton
+    if not btn then return end
+    BF.RestyleSpellBarButton(btn, bs)
+    local geo = SingleBuffBarGeoSig(parent, bs)
+    if s._bf_sbGeoSig ~= geo then
+        local placed, anchored = PlaceSingleBuffBarButton(parent, btn, bs,
+            "bar:SetSize(layout)")
+        if anchored then s.anchored = true end
+        if placed then s._bf_sbGeoSig = geo end
+    end
+end
+
+-- ── Duration Bar plan §5.6 (Stage 5): SHOW EMPTY BAR WHEN MISSING ─────────
+-- The bar's EMPTY STATE -- its background and, when it has one, its border --
+-- as plain addon art on the unit frame, outside the slot button, so it is
+-- there whether or not the buff is: the engine only ever shows the slot
+-- button while the aura matches (memory engine-hides-slot-button-frame). It
+-- is not a "missing aura display" -- it never reads aura state and never hides
+-- when the buff appears -- so it may show while auras are secret.
+--
+-- One holder per frame per entry index (parent._bf_sbEmpty[ci]), created the
+-- first time that entry's empty bar is needed and reused forever after, the
+-- way the frame's other addon art is; never per aura. The SAME region set and
+-- style function as the slot button (BF.BuildSpellBarRegions /
+-- BF.ApplySpellBarStyle), with the fill held at 0 and the pandemic overlay
+-- off, so it is the bar's own background and border and nothing else. The
+-- background covers the WHOLE bar (with the buff absent the whole bar IS the
+-- unfilled part). Frame level: unit frame + 223, i.e. directly BELOW the
+-- slot button (+223 + 1), so the engine's fill draws over it when the buff is
+-- up; while the empty bar is on the button hides its own background and
+-- border (BF.ApplySpellBarStyle, bs.emptyBar), so neither is drawn twice.
+--
+-- Rect: exactly the live bar's -- BF.ResolveSpellBarSpec's size, offsets and
+-- half-pixel edge, against SingleBuffBarTarget -- change-guarded on the bar's
+-- geometry sig; look change-guarded on its style sig. Shown under exactly the
+-- sbb slot's park terms (the caller's `hidden`, relevance, a non-flow bar
+-- resolved for this Layout), with the unit frame's own visibility (it is
+-- the frame's child) AND the sbb slots' host visibility alpha (owner ruling
+-- 2026-10-13: the unit-visible / offline, suppression, vehicle and cinematic
+-- gates -- see SyncEmptyBarAlpha, Auras/ContainerFactory.lua); hidden
+-- otherwise.
+local function EnsureSingleBuffEmptyArt(parent, ci)
+    local pool = parent._bf_sbEmpty
+    if not pool then pool = {}; parent._bf_sbEmpty = pool end
+    local r = pool[ci]
+    if not r then
+        local holder = CreateFrame("Frame", nil, parent)
+        holder:SetFrameLevel(parent:GetFrameLevel() + 223)
+        r = BF.BuildSpellBarRegions(holder, holder:GetFrameLevel())
+        r.bar:SetMinMaxValues(0, 1)
+        r.bar:SetValue(0)
+        r.pandemic:SetAlpha(0)
+        r.pandemicFill:SetAlpha(0)
+        holder:Hide()
+        pool[ci] = r
+    end
+    return r
+end
+
+local function HideSingleBuffEmptyArt(parent, ci)
+    local pool = parent._bf_sbEmpty
+    local r = pool and pool[ci]
+    if r then r._bf_layoutWant = nil end
+    if r and r.holder:IsShown() then r.holder:Hide() end
+end
+
+local function MaintainSingleBuffEmptyBar(parent, ci, c, hidden, groupTypeKey)
+    local bs
+    -- Review fix A2: the Buffs module-off term the fill obeys in :Update
+    -- (BuffsModuleOff) hides the art too; a module flip re-runs Layout.
+    if not hidden and not BuffsModuleOff(parent)
+       and BF:IsContainerCreationRelevant("buff", ci) then
+        local _
+        _, bs = SingleBuffBarSpec(parent, c, groupTypeKey)
+    end
+    if not (bs and bs.emptyBar and bs.w and bs.h) then
+        HideSingleBuffEmptyArt(parent, ci)
+        return
+    end
+    local r = EnsureSingleBuffEmptyArt(parent, ci)
+    local sig = BF.SpellBarStyleSig(bs)
+    if r._bf_styleSig ~= sig then
+        -- The art's own copy: background and border drawn (emptyBar off on
+        -- the copy), whole-bar background, no pandemic. Settings time only.
+        local art = {}
+        for k, v in pairs(bs) do art[k] = v end
+        art.emptyBar, art.bgWhole, art.pandemic = false, true, false
+        if BF:SlotCall("EmptyBarStyle", BF.ApplySpellBarStyle, r, art) then
+            r._bf_styleSig = sig
+        end
+    end
+    local geo = SingleBuffBarGeoSig(parent, bs)
+    if r._bf_geoSig ~= geo then
+        local holder = r.holder
+        local anchor = (bs.anchor and bs.anchor ~= "") and bs.anchor or "CENTER"
+        holder:SetFrameLevel(parent:GetFrameLevel() + 223)
+        holder:SetSize(bs.w, bs.h)
+        holder:ClearAllPoints()
+        holder:SetPoint(anchor, SingleBuffBarTarget(parent, anchor), anchor,
+            bs.offsetX or 0, bs.offsetY or 0)
+        r._bf_geoSig = geo
+    end
+    -- The slot host's visibility alpha (owner ruling 2026-10-13): the same
+    -- unit-visible / offline / suppression / vehicle / cinematic gates the
+    -- sbb slots ride. The gate writers push every later edge
+    -- (ContainerFactory SyncEmptyBarAlpha); this adopts the one in force when
+    -- the holder is created or shown. nil (no host gated yet) = visible.
+    local va = (BF.SlotHostVisAlpha and BF.SlotHostVisAlpha(parent, "sbb" .. ci)) or 1
+    if r._bf_visAlpha ~= va then
+        r._bf_visAlpha = va
+        r.holder:SetAlpha(va)
+    end
+    -- Combat Status: Layout wants it; the edge decides (OnSbCombatEdge).
+    r._bf_layoutWant = true
+    local want = not (sbCombatHidden and sbCombatHidden[ci])
+    if r.holder:IsShown() ~= want then r.holder:SetShown(want) end
+end
+
+-- Health-bar texture edits (BF:RefreshHealthBarLayout) relayout the health
+-- bar only, so a bar on "Use Health Bar Texture" would keep the old file
+-- until its next Layout. This re-runs just the bar restyle -- sig-guarded, so
+-- a bar whose texture did not move pays one string compare -- on every frame
+-- that has an sbb slot. BF:RestampFrameFx is the precedent (the per-spell
+-- health tints have the same dependency and the same caller).
+function BF:RestyleSingleBuffBars()
+    if InCombatLockdown() or self:IsAuraCreationRestricted() then return end
+    local containers = self:GetActiveCustomBuffContainers()
+    if not (containers and #containers > 0) then return end
+    for _, frame in next, self.registeredFrames or {} do
+        local slots = not frame._isPreviewFrame and frame._bf_auraSlots
+        if slots then
+            local gt
+            for ci = 1, #containers do
+                local sl = slots["sbb" .. ci]
+                local btn = sl and sl._bf_slotButton
+                if btn then
+                    if gt == nil and self.ResolveGroupTypeKey then
+                        gt = self:ResolveGroupTypeKey(frame) or false
+                    end
+                    local _, bs = SingleBuffBarSpec(frame, containers[ci], gt or nil)
+                    if bs then BF.RestyleSpellBarButton(btn, bs) end
+                end
+                -- Stage 5: a shown empty bar shares the texture.
+                local ea = frame._bf_sbEmpty and frame._bf_sbEmpty[ci]
+                if ea and ea.holder:IsShown() then
+                    if gt == nil and self.ResolveGroupTypeKey then
+                        gt = self:ResolveGroupTypeKey(frame) or false
+                    end
+                    MaintainSingleBuffEmptyBar(frame, ci, containers[ci],
+                        ContainerHiddenOnLayout(containers[ci], gt or nil), gt or nil)
+                end
+            end
+        end
+        -- Stage 4: the FLOW-HOSTED bar groups, same texture dependency. Only
+        -- containers that have hosted an sb group are visited, and only live
+        -- (unparked) "sbbar" groups; the restyle itself is sig-guarded per
+        -- button inside ApplyAuraGridGroupButtonSpec.
+        local pools = not frame._isPreviewFrame and frame._bf_auraContainers
+        if pools then
+            local gt
+            for key, cc in pairs(pools) do
+                local specs = cc._bf_sbHosted and cc._bf_groupSpecs
+                if specs then
+                    for ci = 1, #containers do
+                        local sc = containers[ci]
+                        local gk = sc.singleBuff and sc.singleBuffKey
+                            and ("sbbar" .. sc.singleBuffKey)
+                        if gk and specs[gk]
+                           and not (cc._bf_dormantGroups and cc._bf_dormantGroups[gk]) then
+                            if gt == nil and self.ResolveGroupTypeKey then
+                                gt = self:ResolveGroupTypeKey(frame) or false
+                            end
+                            local sid = self:GetSingleBuffSpellID(sc)
+                            local bset, bentry
+                            if sid then bset, bentry = BF.GetSpellBar(sid, gt or nil, sc) end
+                            local bs = bset and BF.ResolveSpellBarSpec(frame, bset, bentry)
+                            if bs and bs.flow then
+                                self:ApplyAuraGridGroupButtonSpec(frame, key, gk, { _bf_bar = bs })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- POWER-BAR SHOW/HIDE: re-place this frame's single-buff SLOT buttons now,
+-- not on the next Layout. Called from BF:ReanchorFrameAuraContainers
+-- (ContainerFactory.lua) -- the hook that already re-anchors the frame's grid
+-- containers -- which runs from BF:InvalidateAuraPositionCache, i.e. from
+-- PowerBar:Update ONLY on a visibility FLIP (after it re-lays out the
+-- Container indicator, so _bf_contentW/H already carry the new content rect),
+-- and on a header-identity change. Never per aura, never per frame tick.
+--
+-- What moves: the lift target (AuraLiftAnchorFrame) for both kinds, and for a
+-- bar its SIZE (a fraction of the content rect the power bar just resized;
+-- its un-lifted target, parent.container, follows the power bar by itself).
+-- Change-guarded on each slot's baked geometry sig, through the same
+-- placement functions the Layout arm uses; parked slots are skipped (the
+-- Layout arm re-places them when they unpark).
+--
+-- RESTRICTED (in combat, or auras secret): slot buttons are forbidden to
+-- tainted code then (the v88h ledger), so nothing is written -- same rule as
+-- the Layout arm. The power bar does not change visibility in combat
+-- (owner 2026-10-12), so no regen-replay request is made for a restricted
+-- mismatch; inside a key the slot is queued for the restricted recreate,
+-- exactly as the Layout arm's in-key compare does.
+function BF.ReplaceSingleBuffSlotsForPowerBar(parent)
+    -- Stage 5: a SHOWN empty bar follows the flip too -- its target's rect
+    -- and its % size moved with the content rect. Plain addon art, so the
+    -- (change-guarded) re-place is allowed whether or not auras are restricted.
+    local ea = parent and not parent._isPreviewFrame and parent._bf_sbEmpty
+    if ea then
+        local all = BF:GetActiveCustomBuffContainers()
+        local egt = BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(parent)
+        for ci, r in pairs(ea) do
+            local c = all and all[ci]
+            if c and r.holder:IsShown() then
+                MaintainSingleBuffEmptyBar(parent, ci, c,
+                    ContainerHiddenOnLayout(c, egt), egt)
+            end
+        end
+    end
+    local slots = parent and not parent._isPreviewFrame and parent._bf_auraSlots
+    if not slots then return end
+    local containers = BF:GetActiveCustomBuffContainers()
+    if not (containers and #containers > 0) then return end
+    local restricted = BF:IsAuraCreationRestricted()
+    local inKey = restricted and BF:IsAuraRecreateWindow()
+    local ac, gt
+    for ci = 1, #containers do
+        local c = containers[ci]
+        local sc = slots["sbc" .. ci]
+        local sb = slots["sbb" .. ci]
+        if (sc and not sc.parked and sc._bf_slotButton)
+           or (sb and not sb.parked and sb._bf_slotButton) then
+            if not ac then
+                ac = BF:GetAuraCacheForFrame(parent)
+                gt = BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(parent)
+            end
+            -- Icon slot: only while it positions itself (a flow-anchored
+            -- entry's sbc is parked anyway; belt, so a host sentinel can never
+            -- reach SetPoint).
+            if sc and not sc.parked and sc._bf_slotButton
+               and not BF:GetSingleBuffAnchorHost(c, gt) then
+                local sgeo = ContainerGeo(c, ac, gt)
+                local geoNow = SingleBuffGeoSig(parent, sgeo)
+                if sc._bf_sbGeoSig ~= geoNow then
+                    if not restricted then
+                        local btn = sc._bf_slotButton
+                        local sized = BF:SlotCall("button:SetSize(powerbar)",
+                            btn.SetSize, btn, sgeo.size, sgeo.size)
+                        if AnchorSingleBuffSlot(parent, sc, sgeo) and sized then
+                            sc._bf_sbGeoSig = geoNow
+                        end
+                    elseif inKey then
+                        sc._bf_sbMissWas, sc._bf_sbMissNow = sc._bf_sbGeoSig, geoNow
+                        BF:RequestAuraRecreate(parent, "slot", "sbc" .. ci, "sbc-geo")
+                    end
+                end
+            end
+            -- Bar slot: lift target AND size.
+            if sb and not sb.parked and sb._bf_slotButton then
+                local _, bs = SingleBuffBarSpec(parent, c, gt)
+                if bs then
+                    local geoNow = SingleBuffBarGeoSig(parent, bs)
+                    if sb._bf_sbGeoSig ~= geoNow then
+                        if not restricted then
+                            local placed, anchored = PlaceSingleBuffBarButton(parent,
+                                sb._bf_slotButton, bs, "bar:SetSize(powerbar)")
+                            if anchored then sb.anchored = true end
+                            if placed then sb._bf_sbGeoSig = geoNow end
+                        elseif inKey then
+                            sb._bf_sbMissWas, sb._bf_sbMissNow = sb._bf_sbGeoSig, geoNow
+                            BF:RequestAuraRecreate(parent, "slot", "sbb" .. ci, "sbb-geo")
+                        end
+                    end
+                end
+            end
+        end
+    end
 end
 
 local function EnsureBuffContainers(parent)
@@ -806,11 +1764,19 @@ local function EnsureBuffContainers(parent)
         if not skip and c.singleBuff and SingleBuffSlotMode() then
             if not (parent._bf_auraSlots and parent._bf_auraSlots["sbc" .. ci]) then
                 local sid = BF:GetSingleBuffSpellID(c)
-                if sid then
-                    if not ac then
-                        ac = BF:GetAuraCacheForFrame(parent)
-                        groupTypeKey = BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(parent)
-                    end
+                if sid and not ac then
+                    ac = BF:GetAuraCacheForFrame(parent)
+                    groupTypeKey = BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(parent)
+                end
+                -- Duration Bar plan §5.1: Show Icon OFF with nothing drawn in
+                -- its place ("none", resolved for THIS frame's Layout -- see
+                -- GetSingleBuffIconMode) = no icon display at all, so no slot
+                -- is BUILT for it (an already-built one is parked by the
+                -- maintenance arm in ApplyBuffFilters). This loop runs on
+                -- every Layout, so the slot is built on the first pass after
+                -- the entry has something to draw again.
+                if sid and (BF.GetSingleBuffIconMode
+                        and BF.GetSingleBuffIconMode(c, groupTypeKey, ac)) ~= "none" then
                     EnsureSingleBuffSlot(parent, ci, c, sid, ac, groupTypeKey)
                 end
             end
@@ -851,6 +1817,27 @@ local function EnsureBuffContainers(parent)
                 layoutIndex   = 1000,
             })
             BF:ApplyAuraGridGeometry(parent, key, geo)
+        end
+        -- Duration Bar plan §5.5 (Stage 3): the entry's self-positioned BAR,
+        -- sbb<ci>. Independent of everything above -- of the icon's anchoring
+        -- (a bar may sit on the frame while the icon flows in a host), of
+        -- the icon mode (a bar-only entry has no icon slot at all) and of the
+        -- /bf sbslots mode (a bar is always a slot). Gated on the v74
+        -- relevance, the entry's visibility (Spec condition / Hide -- no slot
+        -- is built for an entry that cannot show) and a bar resolving for
+        -- THIS frame's Layout. Built once; the maintenance arm in
+        -- ApplyBuffFilters parks / restyles / re-places it afterwards. This
+        -- loop runs on every Layout, so a bar switched on later is built on
+        -- the next pass.
+        if c.singleBuff and sbRelevant
+           and not (parent._bf_auraSlots and parent._bf_auraSlots["sbb" .. ci])
+           and BF:IsSingleBuffVisibleForSpec(c) then
+            if not ac then
+                ac = BF:GetAuraCacheForFrame(parent)
+                groupTypeKey = BF.ResolveGroupTypeKey and BF:ResolveGroupTypeKey(parent)
+            end
+            local bsid, bs = SingleBuffBarSpec(parent, c, groupTypeKey)
+            if bs then EnsureSingleBuffBarSlot(parent, ci, c, bsid, bs) end
         end
     end
 end
@@ -947,6 +1934,15 @@ function DeriveSpellButtonSpec(frame, size, sid, sbC)
     local it = BF.GetSpellIconType and BF.GetSpellIconType(sid, sbC)
     local legacyBordered = (it == "BorderedSquare")
     if legacyBordered or it == "SquareDuration" then it = "Square" end
+    -- Duration Bar plan §5.1-5.2: SHOW ICON OFF. Both getters read the
+    -- single-buff entry's own store (nil on the curated sbC == nil path, so
+    -- curated per-spell groups are unchanged). With the icon off the
+    -- threshold-square mode is IGNORED -- it is a way of drawing the icon --
+    -- so the Square type is dropped here, before anything reads it.
+    local iconHidden = BF.GetSpellIconHidden and BF.GetSpellIconHidden(sid, sbC)
+    local textInPlace = iconHidden and BF.GetSpellTextInPlace
+        and BF.GetSpellTextInPlace(sid, sbC) or nil
+    if iconHidden then it, legacyBordered = nil, false end
 
     -- Border, PRE-RESOLVED (v87). One resolver, stamped once — the per-spell
     -- twin of ApplyContainerBorder/ResolveContainerBorder. The shared
@@ -966,7 +1962,27 @@ function DeriveSpellButtonSpec(frame, size, sid, sbC)
     spec.borderThickness = bThick
     spec.blizzardBorders = bBlizz
 
-    if it == "Square" then
+    if iconHidden then
+        -- The icon region draws nothing. The SAME machinery the Square glyph
+        -- path uses for its invisible icon: an ALPHA-0 solidIcon, so
+        -- ApplySolidIcon unbinds the texture live (ClearIcon, behind its
+        -- _bf_iconBound guard) and a button BORN in this mode is never bound
+        -- by InitAuraButton at all. Returning to Show Icon drops solidIcon,
+        -- and ApplySolidIcon's revert branch re-binds SetIcon -- the existing
+        -- Icon <-> Square live switch, nothing new.
+        --
+        -- No border: flat family at thickness 0 is the existing "Square with
+        -- Show Border off" shape (ResolveSpellButtonBorder) -- the underlay
+        -- and the solid edges both stand down, the rounded ring stays hidden.
+        -- Fresh table: solidIcon rides the retained spec.
+        spec.solidIcon       = { r = 0, g = 0, b = 0, a = 0 }
+        spec.borderStyle     = "flat"
+        spec.borderThickness = 0
+        spec.blizzardBorders = false
+        -- Census marker (BUTTON_SPEC_SCALARS): a mode switch always moves the
+        -- restyle signature, whatever else happens to match.
+        spec.iconHidden      = true
+    elseif it == "Square" then
         local e = (BF.GetSolidIconColor and BF.GetSolidIconColor(sid, sbC))
             or { r = 0, g = 0.7, b = 1, a = 1 }
         if e.thresholdEnabled then
@@ -999,7 +2015,12 @@ function DeriveSpellButtonSpec(frame, size, sid, sbC)
     -- One resolver, one apply, at the tail: BF.ApplyIconEffectToSpec folds the
     -- whole entry onto the spec in a single pass (a teardown-then-reapply
     -- would restart the animations visibly).
-    do
+    --
+    -- Not with the icon off (plan §5.1: the Icon Effects tab goes with it):
+    -- glow / ants / flash, desaturate / recolor and the ICON's Pandemic Effect
+    -- are all properties of the icon. Leaving the fields unset is what turns
+    -- them off -- ApplyGlow / ApplyIconEffects treat absent as off.
+    if not iconHidden then
         local ie = BF.GetSpellIconEffect and BF.GetSpellIconEffect(sid, sbC)
         if ie and BF.ApplyIconEffectToSpec then
             BF.ApplyIconEffectToSpec(spec, ie)
@@ -1042,6 +2063,33 @@ function DeriveSpellButtonSpec(frame, size, sid, sbC)
         -- over bare frame; the square's color IS the timer display.
         spec.disableSwipe = true
         spec.disableSpark = true
+    end
+    -- Display-tab redesign: SHOW COOLDOWN TEXT OFF on a customized icon --
+    -- no duration text, as if Show Duration were off for this entry alone;
+    -- stacks unchanged. After the cooldown-text resolve so it wins over it.
+    -- Not for the Square colored by remaining time: that square IS the
+    -- duration text (and the Cooldown Text tab is not offered for it).
+    if not iconHidden and not spec.durationSquare and BF.GetSpellCooldownTextOff
+       and BF.GetSpellCooldownTextOff(sid, sbC) then
+        spec.showDuration = false
+    end
+    -- Show Icon OFF, after the cooldown-text resolve for the same reason the
+    -- square block runs after it: these win over whatever it stamped.
+    --   * No swipe / spark: there is no icon for the wedge to cover.
+    --   * "text" mode: the duration text IS the display. It keeps the
+    --     button's ordinary duration placement (CENTER of the button --
+    --     InitAuraButton / ApplyDurationTextStyle) and is styled by the
+    --     resolved Cooldown Text settings above; nothing else changes.
+    --   * no text in its place: no slot or group is built for the entry
+    --     (collection / slot park), so this spec is only ever reached on the
+    --     /bf sbslots bfc path, where it must at least draw nothing. (A text
+    --     entry whose duration text AND stack count both resolve off is the
+    --     same "none" case -- BF.GetSingleBuffIconMode reads the same
+    --     showDuration / showStacks this spec carries.)
+    if iconHidden then
+        spec.disableSwipe = true
+        spec.disableSpark = true
+        if not textInPlace then spec.showDuration = false end
     end
     return spec
 end
@@ -1163,6 +2211,28 @@ local _sbShared     = {}   -- hostKey -> set of shared sids
 -- the per-pass wipes, and it is what lets a host that lost its last entry still
 -- be swept -- a container is only ever added here by having hosted something.
 local _sbHostKeys   = {}
+-- Duration Bar plan §5.1 CLAIM RULE (owner, 2026-10-11): an ENABLED entry
+-- always keeps its spell claimed, even when it renders nothing. On the buffs
+-- row and in a bfc host that already holds without help -- the settings-time
+-- claim (cfg.generalExclude / _fbsSingleBuffHeld) and the bfc preset exclude
+-- set (bfcAnchoredSids) are both built from the entry's config, not from what
+-- this collection emits. Big Defensive is the exception: `bd`'s exclude list
+-- is built in ApplyBigDefAnchoredEmit from THIS pass's bucket, so an entry
+-- that claims its spell but builds no icon group there would drop out of it
+-- and its spell would fall back into `bd`. This set carries those spell ids:
+-- filled by CollectSingleBuffFlow, wiped by ResetSingleBuffPass, merged into
+-- the exclude list by ApplyBigDefAnchoredEmit (under its existing
+-- SbSetsMatch change guard). Layout time only.
+-- It holds Show Icon OFF / no-text entries anchored to Big Defensive, and
+-- (Stage 4) every entry whose BAR is hosted in Big Defensive, wherever its
+-- icon is: a bar group is not an ICON group, so it is not in the bucket, and
+-- groups in one container do not dedup -- left out, `bd` would show the spell
+-- a second time beside the bar.
+local _sbBigDefClaimed = {}   -- set: sid -> true, bigDef-anchored, no icon group
+-- Stage 4: hostKey -> array of FLOW-HOSTED BAR entries this pass (pooled entry
+-- tables, same as _sbBucket). Its own bucket because a bar group is emitted,
+-- banded and sized differently from an icon group, and never feeds the slack.
+local _sbBarBucket = {}
 
 local function SbHostState(hostKey)
     local b = _sbBucket[hostKey]
@@ -1171,6 +2241,7 @@ local function SbHostState(hostKey)
         _sbBucket[hostKey] = b
         _sbSeen[hostKey]   = {}
         _sbShared[hostKey] = {}
+        _sbBarBucket[hostKey] = {}
         _sbHostKeys[#_sbHostKeys + 1] = hostKey
     end
     return b
@@ -1186,7 +2257,9 @@ local function ResetSingleBuffPass()
         table.wipe(_sbBucket[hk])
         table.wipe(_sbSeen[hk])
         table.wipe(_sbShared[hk])
+        table.wipe(_sbBarBucket[hk])
     end
+    table.wipe(_sbBigDefClaimed)
     _sbPoolUsed = 0
 end
 
@@ -1233,14 +2306,190 @@ end
 -- container's own settings and the engine's default sort, which is precisely
 -- what the shared group already provides. Building a group for it costs a full
 -- pooled button set to display one aura identically to how `main` would.
+--
+-- Review fix A3 + round 2: "has visuals" means a family whose stored state
+-- changes what DeriveSpellButtonSpec stamps (the entry's own spec), so a
+-- setting turned off and back on -- whatever empty map, false flag or
+-- dormant field it leaves behind -- no longer promotes the entry. Per family,
+-- the state that COUNTS (anything else in it renders nothing):
+--   specSpellIconHidden   a flag == true (GetSpellIconHidden reads "== true").
+--   specSpellTextInPlace  a flag == true whose spell's icon is ALSO hidden:
+--                         every reader consults it only under Show Icon off
+--                         (DeriveSpellButtonSpec "iconHidden and
+--                         GetSpellTextInPlace", GetSingleBuffIconMode's
+--                         early "not GetSpellIconHidden -> nil"), and that
+--                         flag already counts on its own.
+--   specSpellIconType     any value but nil / "Icon": Square, and the legacy
+--                         BorderedSquare / SquareDuration read as Square.
+--   specSpellSolidIcons   a row with useBuffsBorder == false. The row's
+--                         Square fill (enabled / color / thresholds) is read
+--                         only when the type is Square, which counts above;
+--                         its border fields are read ignoring `enabled`
+--                         (GetSpellBorderShape) but are inert while Use Buffs
+--                         Border resolves on (ResolveSpellButtonBorder
+--                         returns the Buffs base) -- and for an Icon it
+--                         resolves on unless explicitly false.
+--   specSpellIconEffect   a row not disabled (enabled ~= false, the
+--                         GetSpellIconEffect gate) with something
+--                         ApplyIconEffectToSpec applies: effect glow / ants /
+--                         flash, desaturate, recolor or pandemic. Colors and
+--                         glowStyle alone apply nothing.
+--   specSpellBar          Show Bar on for some Layout -- the entry's own flag
+--                         (every Layout without a tier inherits it), or, with
+--                         per-Layout config on, any tier's.
+--   specSpellBorderColors (round 3) a row not disabled (GetSpellBorderColor:
+--                         "if not e or e.enabled == false then return nil")
+--                         whose spell draws its OWN border: the color reaches
+--                         the spec only through ResolveSpellButtonBorder,
+--                         which returns the Buffs base untouched while Use
+--                         Buffs Border resolves on. An own border is a Square
+--                         type or useBuffsBorder == false, both of which count
+--                         above -- so this never promotes on its own.
+--   specSpellOrdering     (round 3) a row GetSingleBuffOrder answers non-nil
+--                         for: a legacy plain number, or a table that is not
+--                         disabled and carries a slot. An Order is a real
+--                         promotion (a position in the row is only expressible
+--                         as a group), so an entry WITH one still counts.
+-- Every other family counts by presence, exactly as before. A family or map
+-- that is not a table (never written by BF) counts when truthy, as before.
+local SB_ICON_EFFECT_APPLIED = { glow = true, ants = true, flash = true }
+
+local function SBIconHiddenFor(root, kspec, sid)
+    local fam = root.specSpellIconHidden
+    local map = type(fam) == "table" and fam[kspec]
+    return type(map) == "table" and map[sid] == true
+end
+
+-- Does this spell draw its OWN border (the non-inherit branch of
+-- ResolveSpellButtonBorder)? Same inputs as DeriveSpellButtonSpec: the legacy
+-- BorderedSquare type forces it; otherwise Use Buffs Border, per type
+-- (BF.UseBuffsBorderOn: Icon inherits unless false, Square draws its own
+-- unless true).
+local SB_SQUARE_TYPES = { Square = true, BorderedSquare = true, SquareDuration = true }
+local function SBOwnBorderFor(root, kspec, sid)
+    local tf  = root.specSpellIconType
+    local tm  = type(tf) == "table" and tf[kspec]
+    local it  = type(tm) == "table" and tm[sid] or nil
+    if it == "BorderedSquare" then return true end
+    local sf  = root.specSpellSolidIcons
+    local sm  = type(sf) == "table" and sf[kspec]
+    local sh  = type(sm) == "table" and sm[sid] or nil
+    if type(sh) ~= "table" then sh = nil end
+    local inherit = BF.UseBuffsBorderOn and BF.UseBuffsBorderOn(sh, SB_SQUARE_TYPES[it] == true)
+    return not inherit
+end
+
+-- Display-tab redesign: a frame effect counts only while it is configured
+-- (a row not disabled -- the frame-fx projection's "enabled == false" test)
+-- AND that spell's Show Frame Effects is on (the gate the getter applies).
+local function SBFrameFxRowCounts(row, sid, kspec, root)
+    if type(row) ~= "table" then return row and true or false end
+    if row.enabled == false then return false end
+    local f = root.specSpellFrameFxOn
+    local m = type(f) == "table" and f[kspec]
+    return type(m) == "table" and m[sid] == true
+end
+
+local SB_ROW_COUNTS = {
+    specSpellIconHidden = function(row) return row == true end,
+    specSpellTextInPlace = function(row, sid, kspec, root)
+        return row == true and SBIconHiddenFor(root, kspec, sid)
+    end,
+    specSpellIconType = function(row)
+        return row ~= nil and row ~= false and row ~= "Icon"
+    end,
+    specSpellSolidIcons = function(row)
+        if type(row) ~= "table" then return row and true or false end
+        return row.useBuffsBorder == false
+    end,
+    specSpellIconEffect = function(row)
+        if type(row) ~= "table" then return row and true or false end
+        if row.enabled == false then return false end
+        return (SB_ICON_EFFECT_APPLIED[row.effect] or row.desaturate
+            or row.recolor or row.pandemic) and true or false
+    end,
+    specSpellBorderColors = function(row, sid, kspec, root)
+        if type(row) ~= "table" then return row and true or false end
+        if row.enabled == false then return false end
+        return SBOwnBorderFor(root, kspec, sid)
+    end,
+    specSpellOrdering = function(row)
+        if type(row) == "number" then return true end
+        if type(row) ~= "table" then return row and true or false end
+        return row.enabled ~= false and row.slot ~= nil
+    end,
+    -- Display-tab redesign. Show Cooldown Text OFF changes the icon (no
+    -- duration text); ON is the default and stores nothing.
+    specSpellCooldownTextOff = function(row) return row == true end,
+    -- Show Frame Effects counts only TOGETHER with a configured effect, so
+    -- the flag itself never does: each effect row below asks for it.
+    specSpellFrameFxOn = function() return false end,
+    specSpellColors = function(row, sid, kspec, root)
+        return SBFrameFxRowCounts(row, sid, kspec, root)
+    end,
+    specSpellBorders = function(row, sid, kspec, root)
+        return SBFrameFxRowCounts(row, sid, kspec, root)
+    end,
+    specSpellOverlays = function(row, sid, kspec, root)
+        return SBFrameFxRowCounts(row, sid, kspec, root)
+    end,
+    specSpellBar = function(entry)
+        if type(entry) ~= "table" then return false end
+        if entry.showBar == true then return true end
+        if entry.separateGroupConfig and type(entry.groupSettings) == "table" then
+            for _, gs in pairs(entry.groupSettings) do
+                if type(gs) == "table" and gs.showBar == true then return true end
+            end
+        end
+        return false
+    end,
+}
+
+-- Display-tab redesign: takes the ENTRY, not the icon root. Customize Buff
+-- applies only to the icon, so the entry's raw store is walked and an ICON
+-- family counts only while the entry is customized; the families that are
+-- customizations of their own (BF.SB_UNGATED_FAMILIES: Show Icon, Text in
+-- place, the bar, Show Frame Effects) and the frame effects behind it count
+-- either way. Cooldown Text for an uncustomized entry is read only in "text"
+-- mode, where the Show Icon flag already counts, so it is not walked then.
+local function SingleBuffRootHasVisuals(sc)
+    local root = type(sc) == "table" and sc.singleBuff and sc.sbVisuals
+    if type(root) ~= "table" then return false end
+    local customized = sc.singleBuffCustomized ~= false
+    local ungated = BF.SB_UNGATED_FAMILIES or {}
+    local fxFams  = BF.SB_FRAME_FX_FAMILIES or {}
+    for family, fam in pairs(root) do
+      if customized or ungated[family] or fxFams[family] then
+        local counts = SB_ROW_COUNTS[family]
+        if not counts then return true end
+        if type(fam) == "table" then
+            for kspec, map in pairs(fam) do
+                if type(map) == "table" then
+                    for sid, row in pairs(map) do
+                        if counts(row, sid, kspec, root) then return true end
+                    end
+                elseif map then
+                    return true
+                end
+            end
+        elseif fam then
+            return true
+        end
+      end
+    end
+    return false
+end
+
 local function SingleBuffNeedsOwnGroup(sc)
-    local root = BF.GetSingleBuffVisualRoot and BF.GetSingleBuffVisualRoot(sc)
-    if root and next(root) ~= nil then return true end
+    if SingleBuffRootHasVisuals(sc) then return true end
     if BF:GetSingleBuffOrder(sc) ~= nil then return true end
     -- v81 rule 3: non-default Applied By promotes. ContainerCasterScope is the
     -- same file-local the sb filter path reads, so the widget, the sb filter
     -- and this test can never disagree about what a stored value means.
     if ContainerCasterScope(sc) ~= "mine" then return true end
+    -- Combat Status other than Always promotes: the entry is parked on its
+    -- own at each combat edge, which a shared group cannot do.
+    if SbCombatMode(sc) then return true end
     -- v81 derived edge: defensive-category spells promote (see above).
     local sid = BF.GetSingleBuffSpellID and BF:GetSingleBuffSpellID(sc)
     local e = sid and ns and ns.SpellData and ns.SpellData.BYID
@@ -1274,11 +2523,15 @@ local function SingleBuffSharesHostGroup(sc, hostKind, hostC)
     if hostKind == "bigDef" then return false end
     if hostKind == "buffs"  then return not SingleBuffNeedsOwnGroup(sc) end
     if not hostC then return false end
-    local root = BF.GetSingleBuffVisualRoot and BF.GetSingleBuffVisualRoot(sc)
-    if root and next(root) ~= nil then return false end
+    if SingleBuffRootHasVisuals(sc) then return false end
     if BF:GetSingleBuffOrder(sc) ~= nil then return false end
+    if SbCombatMode(sc) then return false end  -- Combat Status: own group
     return ContainerAuraFilter(sc) == ContainerAuraFilter(hostC)
 end
+-- Read-only export for the options preview (DummyAuras.lua): an entry that
+-- SHARES its host's group renders inside that group (band 2, layoutIndex
+-- 1000), not in the sb Before/After bands, and the preview orders it so.
+BF.SingleBuffSharesHostGroup = SingleBuffSharesHostGroup
 
 -- Order 0/None sorts after every numbered entry; container index is the stable
 -- tiebreak so the flow cannot depend on pairs() order. Ranks WITHIN one host
@@ -1289,10 +2542,49 @@ local function SingleBuffFlowLess(x, y)
     return x.ci < y.ci
 end
 
+-- ── Duration Bar plan §5.5 (Stage 4): COLLECT ONE FLOW-HOSTED BAR ──────────
+-- An entry whose bar's Anchor Point is a flow host (Buffs / Big Defensive /
+-- "C:<key>") gets a bar GROUP in that host, independent of where its icon is
+-- (its icon may be self-positioned, in another host, or absent). Bucketed per
+-- host like the icon entries; a self-positioned bar is the sbb<ci> slot's and
+-- is not collected here. Layout time only.
+local function CollectSingleBuffBar(parent, sc, ci, sid, groupTypeKey)
+    if not (BF.GetSpellBar and BF.ResolveSpellBarSpec) then return end
+    local bset, bentry = BF.GetSpellBar(sid, groupTypeKey, sc)
+    if not bset then return end
+    -- Cheap early-out before the full spec: a self-positioned bar (the sbb
+    -- slot's) is not collected. Raw read with ResolveSpellBarSpec's own
+    -- fallback (tier, then entry).
+    local v = bset.anchorPoint
+    if v == nil and bentry and bentry ~= bset then v = bentry.anchorPoint end
+    if not BF.IsFlowAnchorValue(v) then return end
+    local bs = BF.ResolveSpellBarSpec(parent, bset, bentry)
+    if not (bs and bs.flow) then return end
+    local h = BF:GetFlowHostForValue(bs.anchor)
+    if not h then return end
+    -- Scalars NOW: host descriptors are interned and re-pointed per call.
+    local kind    = h.kind
+    local hostKey = (kind == "bfc") and ("bfc" .. h.ci) or kind
+    SbHostState(hostKey)
+    _sbPoolUsed = _sbPoolUsed + 1
+    local e = _sbPool[_sbPoolUsed]
+    if not e then e = {}; _sbPool[_sbPoolUsed] = e end
+    e.c, e.ci, e.sid = sc, ci, sid
+    e.order = BF:GetSingleBuffOrder(sc) or 99
+    e.after = bs.after
+    e.bs    = bs
+    local list = _sbBarBucket[hostKey]
+    list[#list + 1] = e
+    -- Plan §5.1 claim rule: the spell stays out of `bd` (see _sbBigDefClaimed).
+    if kind == "bigDef" then AddSbSet(_sbBigDefClaimed, sc, sid) end  -- R2
+end
+
 -- ── v92 §A3.1: COLLECTION ─────────────────────────────────────────────────
 -- ONE walk of the container array per pass, bucketing every anchored entry by
 -- its resolved host. Returns passValid -- see the sweep note below.
-local function CollectSingleBuffFlow(parent, groupTypeKey)
+-- `ac` (the frame's aura cache) feeds the per-Layout icon-mode resolution
+-- (GetSingleBuffIconMode); nil resolves against BF.AuraCache.
+local function CollectSingleBuffFlow(parent, groupTypeKey, ac)
     ResetSingleBuffPass()
     local containers = BF:GetActiveCustomBuffContainers() or {}
     local vis = parent._bf_bfcVisible
@@ -1316,10 +2608,15 @@ local function CollectSingleBuffFlow(parent, groupTypeKey)
         -- visible: the same first-pass semantics v65 had. It self-corrects,
         -- because ApplyBuffFilters re-runs this collection with a resolved
         -- vis[] later in the very same Layout.
-        local h = BF:GetSingleBuffAnchorHost(sc, groupTypeKey)
-        if h and not sc.singleBuffHidden and (vis == nil or vis[ci] ~= false) then
-            local sid = BF:GetSingleBuffSpellID(sc)
-            if sid then
+        --
+        -- Stage 4: the same visibility gates the entry's bar, which is
+        -- collected whether or not the ICON is anchored to a host.
+        local visible = not sc.singleBuffHidden and (vis == nil or vis[ci] ~= false)
+        local sid = visible and BF:GetSingleBuffSpellID(sc) or nil
+        local h   = sid and BF:GetSingleBuffAnchorHost(sc, groupTypeKey)
+        if sid then CollectSingleBuffBar(parent, sc, ci, sid, groupTypeKey) end
+        if h then
+            do
                 -- Read the descriptor's fields NOW and keep only scalars: host
                 -- descriptors are SHARED, interned and re-pointed per call.
                 local kind   = h.kind
@@ -1343,8 +2640,21 @@ local function CollectSingleBuffFlow(parent, groupTypeKey)
                 -- both, with no global answer required. An anchored entry has
                 -- no bfc container of its own, so there is nothing to double
                 -- against.
-                if SingleBuffSharesHostGroup(sc, kind, hostC) then
-                    _sbShared[hostKey][sid] = true
+                local iconMode = BF.GetSingleBuffIconMode
+                    and BF.GetSingleBuffIconMode(sc, groupTypeKey, ac)
+                if iconMode == "none" then
+                    -- Duration Bar plan §5.1: Show Icon OFF and nothing drawn
+                    -- in its place (no text in the icon's place, or text that
+                    -- resolves to neither duration nor stack count in this
+                    -- Layout) -- the entry has no icon display, so it neither
+                    -- shares the host's group (that WOULD render it) nor gets
+                    -- one of its own; it takes no space in the flow. Its old
+                    -- sb group, if any, is parked by this host's stale sweep.
+                    -- The spell stays CLAIMED (see _sbBigDefClaimed): on
+                    -- Big Defensive that has to be carried to `bd` by hand.
+                    if kind == "bigDef" then AddSbSet(_sbBigDefClaimed, sc, sid) end  -- R2
+                elseif SingleBuffSharesHostGroup(sc, kind, hostC) then
+                    AddSbSet(_sbShared[hostKey], sc, sid)  -- R2: every ID of the entry
                 else
                     _sbPoolUsed = _sbPoolUsed + 1
                     local e = _sbPool[_sbPoolUsed]
@@ -1352,6 +2662,7 @@ local function CollectSingleBuffFlow(parent, groupTypeKey)
                     e.c   = sc
                     e.ci  = ci
                     e.sid = sid
+                    e.bs  = nil
                     -- None sorts last within its band, not first.
                     e.order = BF:GetSingleBuffOrder(sc) or 99
                     e.after = BF:GetSingleBuffRelativeOrder(sc, groupTypeKey) == "AFTER"
@@ -1363,6 +2674,8 @@ local function CollectSingleBuffFlow(parent, groupTypeKey)
     for i = 1, #_sbHostKeys do
         local b = _sbBucket[_sbHostKeys[i]]
         if #b > 1 then table.sort(b, SingleBuffFlowLess) end
+        local bb = _sbBarBucket[_sbHostKeys[i]]
+        if #bb > 1 then table.sort(bb, SingleBuffFlowLess) end
     end
     return passValid
 end
@@ -1370,12 +2683,14 @@ end
 -- ── v92 §A3.2: EMIT ONE HOST ──────────────────────────────────────────────
 -- The v65 group build, parameterized by the host's container key and geometry.
 -- Bands are per host and compatible with every host's existing indexes:
---   1..499     sb* Relative Order = Before
+--   1..499     sb* Relative Order = Before (Stage 4: sbbar* bars first,
+--              then the sb* icons)
 --   500+rank   sp* customized spells        (buffs / bfc)
 --   1000       main                         (buffs / bfc) or bd (bigDef, §A5)
 --   1500+i     pre* preset groups           (buffs / bfc)
 --   2000       raidbuffs                    (buffs)
---   2500+      sb* Relative Order = After
+--   2500+      sb* Relative Order = After (Stage 4: the sb* icons first,
+--              then the sbbar* bars)
 --
 -- `dormant` builds/keeps the groups PARKED. `sidMap`, when given, records
 -- groupKey -> spellID. Both fed the v92 bigDef assist gate, which v94 removed
@@ -1396,7 +2711,11 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
     local c = parent._bf_auraContainers and parent._bf_auraContainers[featureKey]
     if not c then return end
     local list = _sbBucket[hostKey]
-    if not list or #list == 0 then return end
+    local bars = _sbBarBucket[hostKey]
+    if (not list or #list == 0) and (not bars or #bars == 0) then return end
+    -- SbHostState creates both buckets together; belt for the loops below.
+    list = list or {}
+    bars = bars or {}
     -- The host's base size is the divisor of every mult below; the same "or 12"
     -- fallback every other size read in this file carries, so a host whose
     -- geometry has not resolved yet renders at a sane size instead of erroring
@@ -1408,12 +2727,26 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
     -- groups themselves (both live on the engine container, which is never
     -- destroyed), so it can never miss one.
     c._bf_sbHosted = true
+    -- Stage 4 bands: within the Before band the host's BARS come first, then
+    -- its icon entries; within the After band the icons first, then the bars.
+    -- "Before = icons lifted above the bar" / "After = the bar sits beyond the
+    -- icons" (plan §5.6): a full-line bar placed first pushes every element
+    -- after it onto the next line, and one placed last wraps onto its own.
+    local nBarBefore = 0
+    for i = 1, #bars do
+        if not bars[i].after then nBarBefore = nBarBefore + 1 end
+    end
     local nBefore, nAfter = 0, 0
     for i = 1, #list do
         local e  = list[i]
         local gk = "sb" .. (e.c.singleBuffKey or tostring(e.ci))
         seen[gk] = true
         if sidMap then sidMap[gk] = e.sid end
+        -- Combat Status: the host's park, or the entry's own while its
+        -- condition hides it. Recorded for the combat edge (see the block at
+        -- the top of this file).
+        local eDormant = dormant or not SbCombatOK(e.c)
+        NoteSbCombatGroup(parent, gk, featureKey, dormant, e.c, (SbSet(e.c, e.sid)))
 
         local layoutIndex
         if e.after then
@@ -1421,7 +2754,7 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
             layoutIndex = SINGLE_BUFF_AFTER_BASE + nAfter
         else
             nBefore = nBefore + 1
-            layoutIndex = nBefore
+            layoutIndex = nBarBefore + nBefore
         end
 
         -- The entry's own size, expressed as a multiple of the HOST's size --
@@ -1442,22 +2775,62 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
         --
         -- MaxSingleBuffSizeFor applies the SAME rule, so the wrap budget and
         -- the rendered size can never disagree.
+        --
+        -- Display-tab redesign: an uncustomized entry whose text stands in
+        -- for its icon ("text" mode) has a size of its own too -- its Text
+        -- Area Size, which no longer needs Customize Buff. Same rule as the
+        -- wrap budget above.
         local mult = 1
-        if e.c.singleBuffCustomized ~= false then
+        local eMode = BF.GetSingleBuffIconMode
+            and BF.GetSingleBuffIconMode(e.c, groupTypeKey, ac)
+        if e.c.singleBuffCustomized ~= false or eMode == "text" then
             local eSize = BF:ResolveContainerGeometry(e.c, groupTypeKey, ac)
             if eSize and eSize > 0 then mult = eSize / baseSize end
         end
 
-        local spec = DeriveSpellButtonSpec(parent, baseSize, e.sid, e.c)
+        -- AUTO SCALE BASE (owner, 2026-10-11): the spec is derived at the size
+        -- the entry is actually DRAWN at -- baseSize * mult, i.e. the same
+        -- resolver answer its group's _bf_sizeMult carries (its own Icon Size,
+        -- or its Text Area Size in text mode, plan §5.3) -- so Auto Scale
+        -- Duration Text (durationScale) and stack auto-scale (stackScale)
+        -- scale from the entry's own size, exactly as a self-positioned slot's
+        -- do (DeriveSingleBuffSlotSpec is handed the resolver's size). Until
+        -- this, a flow entry with its own size scaled its text from the HOST's
+        -- base. A Default entry has mult 1, so it is unchanged. Both fields are
+        -- in the restyle census, so a size edit re-walks the button once and a
+        -- steady-state Layout pays nothing new.
+        local spec = DeriveSpellButtonSpec(parent, baseSize * mult, e.sid, e.c)
         spec.tooltipFrameY = ttY
         spec._bf_sizeMult  = mult
         spec.size          = baseSize * mult
         -- The host container's own border and duration for a Default entry
         -- (see the note on `hostC` above). After the size: the duration
         -- stamp scales its text from spec.size.
-        if hostC and not hostC.singleBuff and e.c.singleBuffCustomized == false then
+        -- Display-tab redesign: NOT with the entry's icon off. Show Icon is
+        -- no longer a customization, so a Default entry can be in "text" or
+        -- "none" mode; its spec is then the derived hidden-icon one (no
+        -- border, no swipe, the text styled by the entry's Cooldown Text or
+        -- the inherited Buffs defaults -- what GetSingleBuffIconMode reads),
+        -- and the host's icon border / duration would undo it.
+        if hostC and not hostC.singleBuff and e.c.singleBuffCustomized == false
+           and eMode == nil then
             ApplyContainerBorder(spec, hostC, groupTypeKey, ac)
             ApplyContainerDuration(spec, hostC, groupTypeKey, ac)
+        elseif hostC and not hostC.singleBuff and e.c.singleBuffCustomized == false
+           and eMode == "text"
+           and not (BF.ResolveSpellCooldownText
+                    and BF.ResolveSpellCooldownText(e.sid, groupTypeKey, ac, e.c)) then
+            -- Header-fix round, item 5 (owner): the stand-in text of an
+            -- uncustomized entry takes THIS container's duration style -- the
+            -- one its default icon would wear (the same ApplyContainerDuration),
+            -- unless the entry's own Cooldown Text overrides it. Then the
+            -- hidden-icon terms are stamped back: there is still no icon for a
+            -- swipe or spark to cover (DeriveSpellButtonSpec's tail).
+            -- GetSingleBuffIconMode reads the same container style for
+            -- "text" vs "none" (BF.SingleBuffTextHostDuration), so the two agree.
+            ApplyContainerDuration(spec, hostC, groupTypeKey, ac)
+            spec.disableSwipe = true
+            spec.disableSpark = true
         end
 
         -- The ENTRY's caster scope, not the host's. The host's filter would
@@ -1473,17 +2846,17 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
                 -- Include set from the START, for the reason spelled out in
                 -- ApplySpellGroups: a group born with a bare "HELPFUL" would
                 -- match every helpful aura if the post-creation setter were
-                -- ever denied.
-                candidateFilters = { includeSpellIDs = { [e.sid] = true } },
+                -- ever denied. R2: the entry's ID map (one group per ENTRY).
+                candidateFilters = { includeSpellIDs = SbSet(e.c, e.sid) },
             })
             if c._bf_groupSpecs and c._bf_groupSpecs[gk] then
                 c:SetAuraGroupCandidateFilters(gk,
-                    { includeSpellIDs = { [e.sid] = true } })
+                    { includeSpellIDs = SbSet(e.c, e.sid) })
                 -- Groups are born LIVE (AddAuraGroup takes a real filter and
                 -- creation never seeds the dormant flag), so a host that wants
                 -- them hidden has to park immediately -- the same "park it the
                 -- instant it exists" rule `main` runs on.
-                if dormant then
+                if eDormant then
                     BF:SetAuraGridGroupDormant(parent, featureKey, gk, true)
                 end
             end
@@ -1541,12 +2914,70 @@ local function EmitSingleBuffHostGroups(parent, featureKey, hostKey, ac, groupTy
             -- touched: parking IS a candidate set (DORMANT_CANDIDATES), and
             -- stamping the include set over it would silently unpark the group.
             -- The unpark path re-stamps it, here and in BigDefIcons:Update.
-            if dormant then
+            if eDormant then
                 BF:SetAuraGridGroupDormant(parent, featureKey, gk, true)
             else
                 BF:SetAuraGridGroupDormant(parent, featureKey, gk, false)
                 -- Re-apply AFTER the unpark: unparking clears the candidate set.
-                c:SetAuraGroupCandidateFilters(gk, { includeSpellIDs = { [e.sid] = true } })
+                c:SetAuraGroupCandidateFilters(gk, { includeSpellIDs = SbSet(e.c, e.sid) })
+            end
+            BF:SetAuraGridGroupFilter(parent, featureKey, gk, filter)
+            BF:ApplyAuraGridGroupButtonSpec(parent, featureKey, gk, spec)
+        end
+    end
+
+    -- ── Duration Bar plan §5.5 (Stage 4): THE BAR GROUPS ──────────────────
+    -- One 1-frame group per flow-hosted bar, keyed "sbbar" .. singleBuffKey
+    -- (keys are "<sid>_<n>", so it can never collide with an icon's "sb"
+    -- .. key). Separate from the entry's icon group: groups in one container do
+    -- NOT dedup, so both match the aura and both render. Same filter (the
+    -- entry's Applied By), include set = the spell from the START, same
+    -- dormancy and park rules as the icon groups above, and the same stale
+    -- sweep (its "sb" prefix covers "sbbar", and the key is in `seen`). The
+    -- group spec carries the resolved bar spec; ContainerFactory builds the
+    -- bar in each pooled button's init window (MakeInitFn), sizes it barW x
+    -- barH, and derives its layout cell from the host's fill axis and final
+    -- line budget (SpellBarFlowCell). Restyle / re-bind / resize are change-
+    -- guarded inside ApplyAuraGridGroupButtonSpec. Layout time only.
+    local bBefore, bAfter = 0, 0
+    for i = 1, #bars do
+        local e  = bars[i]
+        local gk = "sbbar" .. (e.c.singleBuffKey or tostring(e.ci))
+        seen[gk] = true
+        local eDormant = dormant or not SbCombatOK(e.c)  -- Combat Status
+        NoteSbCombatGroup(parent, gk, featureKey, dormant, e.c, (SbSet(e.c, e.sid)))
+        local layoutIndex
+        if e.after then
+            bAfter = bAfter + 1
+            layoutIndex = SINGLE_BUFF_AFTER_BASE + nAfter + bAfter
+        else
+            bBefore = bBefore + 1
+            layoutIndex = bBefore
+        end
+        local spec   = { _bf_bar = e.bs }
+        local filter = ContainerAuraFilter(e.c)
+        if not (c._bf_groupSpecs and c._bf_groupSpecs[gk]) then
+            BF:EnsureAuraGridSpellGroup(parent, featureKey, gk, {
+                filter = filter, buttonSpec = spec,
+                layoutIndex = layoutIndex, maxFrameCount = 1,
+                spacing = spacing, rowSpacing = rowSpacing,
+                candidateFilters = { includeSpellIDs = SbSet(e.c, e.sid) },  -- R2
+            })
+            if c._bf_groupSpecs and c._bf_groupSpecs[gk] then
+                c:SetAuraGroupCandidateFilters(gk,
+                    { includeSpellIDs = SbSet(e.c, e.sid) })
+                if eDormant then
+                    BF:SetAuraGridGroupDormant(parent, featureKey, gk, true)
+                end
+            end
+        else
+            BF:EnsureAuraGridSpellGroup(parent, featureKey, gk, { layoutIndex = layoutIndex })
+            if eDormant then
+                BF:SetAuraGridGroupDormant(parent, featureKey, gk, true)
+            else
+                BF:SetAuraGridGroupDormant(parent, featureKey, gk, false)
+                -- After the unpark: unparking clears the candidate set.
+                c:SetAuraGroupCandidateFilters(gk, { includeSpellIDs = SbSet(e.c, e.sid) })  -- R2
             end
             BF:SetAuraGridGroupFilter(parent, featureKey, gk, filter)
             BF:ApplyAuraGridGroupButtonSpec(parent, featureKey, gk, spec)
@@ -1588,6 +3019,10 @@ local function SweepStaleSingleBuffGroups(parent, featureKey, hostKey)
     for _, gk in ipairs(c._bf_groupKeys) do
         if gk:sub(1, 2) == "sb" and not (seen and seen[gk]) then
             BF:SetAuraGridGroupDormant(parent, featureKey, gk, true)
+            -- Combat Status: a swept group must not be unparked by the edge.
+            local cg = parent._bf_sbCombatGroups
+            local rec = cg and cg[gk]
+            if rec and rec.fk == featureKey then cg[gk] = nil end
         end
     end
 end
@@ -1659,7 +3094,14 @@ local function ApplyBigDefAnchoredEmit(parent, ac, groupTypeKey, passValid)
     if not cc then return end
     local list = _sbBucket.bigDef
     local n = list and #list or 0
-    if n == 0 and not cc._bf_sbHosted then return end
+    -- Also go on while a claim-only entry is anchored here (it builds no group,
+    -- so it never sets _bf_sbHosted) or while an earlier pass's exclude stamp
+    -- is still on `bd` -- the latter is the pass that clears it once the last
+    -- claim is gone. Neither can be true on a profile with nothing anchored.
+    if n == 0 and not cc._bf_sbHosted and next(_sbBigDefClaimed) == nil
+       and not cc._bf_bdExcl then
+        return
+    end
     -- `bd` is created through EnsureAuraGridContainer's container-level `groups`
     -- list, which takes no layoutIndex -- so it has NONE, and the sb bands
     -- (1..499 / 2500+) would have nothing to sit before and after. 1000 is the
@@ -1682,11 +3124,13 @@ local function ApplyBigDefAnchoredEmit(parent, ac, groupTypeKey, passValid)
     end
     -- ── Duplicate mitigation ───────────────────────────────────────────────
     -- An anchored entry whose spell is itself engine-flagged BIG_DEFENSIVE
-    -- matches BOTH `bd` and its own sb group. Cross-group overlap is deduped by
-    -- the engine but the WINNER is unspecified (see the v79/v85 notes in
-    -- BigDefIcons.lua), so the entry's custom visuals might or might not be the
-    -- copy that renders. Excluding the promoted ids from `bd` makes the sb
-    -- group the only candidate.
+    -- matches BOTH `bd` and its own sb group. Groups in one container do NOT
+    -- dedup -- each includes a matching aura independently (12.1.0 / 12.1.5
+    -- UpdateAuraInGroups; PTR-confirmed, ContainerFactory.lua slot-visual
+    -- note) -- so without this the spell renders twice: once from `bd` at the
+    -- Big Defensive look, once from the entry's own group. Excluding the
+    -- promoted ids (and the claim-only / bar-hosted ids, _sbBigDefClaimed)
+    -- from `bd` makes the entry's own groups the only copies.
     --
     -- Spell-ID candidates are silently dropped for HELPFUL auras on
     -- NON-assistable units (the engine's identity carve-out), which makes this
@@ -1705,7 +3149,15 @@ local function ApplyBigDefAnchoredEmit(parent, ac, groupTypeKey, passValid)
     local ex
     for i = 1, n do
         ex = ex or {}
-        ex[list[i].sid] = true
+        AddSbSet(ex, list[i].c, list[i].sid)  -- R2: every ID of the entry
+    end
+    -- Duration Bar plan §5.1 claim rule: entries anchored here that build no
+    -- icon group still keep their spell out of `bd` (see _sbBigDefClaimed).
+    -- Merged into the SAME fresh table, so the change guard below and the
+    -- engine stamp see one set.
+    for sid in pairs(_sbBigDefClaimed) do
+        ex = ex or {}
+        ex[sid] = true
     end
     if not SbSetsMatch(cc._bf_bdExcl, ex) then
         if pcall(cc.SetAuraGroupCandidateFilters, cc, "bd",
@@ -1756,12 +3208,15 @@ function BF.ApplyBigDefAnchoredGroups(parent, ac, groupTypeKey)
     if groupTypeKey == nil and BF.ResolveGroupTypeKey then
         groupTypeKey = BF:ResolveGroupTypeKey(parent)
     end
-    if not cc._bf_sbHosted
+    -- (+ cc._bf_bdExcl: a claim-only entry -- Duration Bar plan §5.1 -- can
+    -- leave an exclude stamp on `bd` without ever setting _bf_sbHosted, and the
+    -- pass after it is un-anchored must still reach the emit to clear it.)
+    if not cc._bf_sbHosted and not cc._bf_bdExcl
        and not HostHasAnchoredSingleBuffs(ac, groupTypeKey, "bigDef") then
         return
     end
     ApplyBigDefAnchoredEmit(parent, ac, groupTypeKey,
-        CollectSingleBuffFlow(parent, groupTypeKey))
+        CollectSingleBuffFlow(parent, groupTypeKey, ac))
 end
 
 -- ── v92 §A3: the flow builder ─────────────────────────────────────────────
@@ -1769,7 +3224,7 @@ end
 -- sid set (the include set ApplyBuffFilters hands to `main`); the other hosts'
 -- shared sets are consumed here, in the bfc arm.
 local function ApplySingleBuffGroups(parent, ac, groupTypeKey, cfg)
-    local passValid = CollectSingleBuffFlow(parent, groupTypeKey)
+    local passValid = CollectSingleBuffFlow(parent, groupTypeKey, ac)
 
     -- Host: the regular buffs row.
     local buffSize = ac._roundedBuffSize or 12
@@ -1891,7 +3346,7 @@ end
 -- key=value pairs. processedAuraType and anything else scalar the engine grows
 -- later rides the generic branch for free.
 --
--- excludeSpellIDs is summarised by SIZE, not contents, on purpose. It is the
+-- excludeSpellIDs is summarized by SIZE, not contents, on purpose. It is the
 -- only unbounded map here (the single-buff claim set), it is passed ONLY by
 -- the Buffs caller, and that caller already carries an exact generation for it
 -- (cfg.generation -> exGen), which the gate tests separately: the documented
@@ -1937,7 +3392,7 @@ local function CandidateSig(cand)
             for j = 1, #sub do
                 local sv = v[sub[j]]
                 -- Read the value BEFORE overwriting the slot with the pair.
-                -- A third level would have to be summarised (never tostring'd:
+                -- A third level would have to be summarized (never tostring'd:
                 -- a table address changes every rebuild and would make the
                 -- signature differ on every pass) -- no such shape exists.
                 sub[j] = tostring(sub[j]) .. "="
@@ -2135,7 +3590,7 @@ local function ApplyPresetGroups(parent, key, c, groupTypeKey, ac,
     -- the engine holding what THIS GROUP should be filtering on".
     --
     -- WHAT REPLACES IT. That exact question, per group: candSig = the composed
-    -- filter string + a deterministic serialisation of the composed candidate
+    -- filter string + a deterministic serialization of the composed candidate
     -- table (CandidateSig above), compared against cc._bf_groupCandSig[gk] --
     -- the last signature this group actually LANDED on the engine, stamped only
     -- inside the successful pcall. Properties that matter:
@@ -2314,7 +3769,7 @@ local function ApplyPresetGroups(parent, key, c, groupTypeKey, ac,
                 -- two locals both branches consume, so the guard can never
                 -- describe anything other than what is actually pushed. Cost is
                 -- one small sort + concat per preset group per Layout; the
-                -- unbounded exclude set is summarised rather than walked (see
+                -- unbounded exclude set is summarized rather than walked (see
                 -- CandidateSig).
                 local candSig = tostring(baseFilter) .. "|" .. CandidateSig(baseCand)
                 -- v71: layoutIndex is SIZE-DRIVEN for debuff presets so the larger
@@ -2525,10 +3980,10 @@ BF.ApplyPresetGroups = ApplyPresetGroups
 --   fxh<sid>: health bar color tint (over the fill; stamped with the
 --             profile's own health bar texture so a custom bar texture
 --             survives the tint — see RestampFxHealth)
---   fxb<sid>: frame border (edge textures; Prioritise = frame level
+--   fxb<sid>: frame border (edge textures; Prioritize = frame level
 --             13 vs 10, straddling the dispel border's 12)
 --   fxo<sid>: health bar overlay (anchored to the gradient's strong
---             edge; Prioritise = level 5 vs 2 around the dispel
+--             edge; Prioritize = level 5 vs 2 around the dispel
 --             overlay's 4). durationMap IS ported via SetDurationBar.
 -- See FX_LEVEL_* below for the full health-bar layer order.
 -- All stamping is change-guarded and Layout-driven; the hot Update
@@ -2549,8 +4004,8 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 -- and neither may drift from it.
 --
 -- Each lane carries the same four rungs, in the owner's order:
---     buff (Prioritise OFF)  <  container  <  dispel  <  buff (Prioritise ON)
--- i.e. "Prioritise Over Debuff X" OFF => Dispellable > Container > Buffs, ON =>
+--     buff (Prioritize OFF)  <  container  <  dispel  <  buff (Prioritize ON)
+-- i.e. "Prioritize Over Debuff X" OFF => Dispellable > Container > Buffs, ON =>
 -- Buffs > Dispellable > Container. Per-container debuff effects sit exactly one
 -- rung below their dispel kind by construction (container = dispel - 1).
 --
@@ -2562,7 +4017,7 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 --        2  parent+3   overlay  buff overlay             FX_LEVEL_OVERLAY
 --        3  parent+4   tint     dispel health tint       DISPEL_VISUAL_LEVEL.dispelHealthColor
 --        3  parent+4   overlay  CONTAINER overlay        BF.CONTAINER_FX_LEVEL.ov
---        4  parent+5   tint     buff tint, prioritised   FX_LEVEL_HEALTH_PRIO
+--        4  parent+5   tint     buff tint, prioritized   FX_LEVEL_HEALTH_PRIO
 --        4  parent+5   overlay  dispel overlay           DISPEL_VISUAL_LEVEL.dispelOverlay
 --        5  parent+6   overlay  buff overlay, prio       FX_LEVEL_OVERLAY_PRIO
 --        —  parent+7            absorbClip / healPred / overshield
@@ -2574,7 +4029,7 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 --        —  parent+11           healAbsorb  (AbsorbBars.lua:262, hBar+10)
 --       11  parent+12  border   CONTAINER border         BF.CONTAINER_FX_LEVEL.bd
 --       12  parent+13  border   dispel border            DISPEL_VISUAL_LEVEL.dispelBorder
---       13  parent+14  border   buff border, prioritised FX_LEVEL_BORDER_PRIO
+--       13  parent+14  border   buff border, prioritized FX_LEVEL_BORDER_PRIO
 --      223  parent+224          dispel dot               DISPEL_VISUAL_LEVEL.dispelDot
 --
 -- ABSORB ART is hBar-RELATIVE, and hBar is parent+1 — so hBar+6/+7/+10 are
@@ -2584,7 +4039,7 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 -- this scheme tried to keep rungs "above the absorb". Do not reintroduce that
 -- constraint: every tint/overlay rung here is below every piece of absorb art,
 -- which is also why the overlay lane must not creep past offset 5 — offset 6
--- would put a prioritised buff overlay at parent+7, tying absorbClip.
+-- would put a prioritized buff overlay at parent+7, tying absorbClip.
 --
 -- ── CROSS-LANE TIE POLICY (read before renumbering) ────────────────────────
 -- Eight rungs (four tint, four overlay) have to fit in the usable integers 1..5
@@ -2592,14 +4047,14 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 -- (see absorbClip above). Eight into five does not go, so cross-KIND ordering
 -- CANNOT be strict everywhere. The contract is therefore:
 --
---   * PER LANE (same kind) the order is STRICT. That is what the Prioritise
+--   * PER LANE (same kind) the order is STRICT. That is what the Prioritize
 --     toggles promise and what the container's dispel-1 rule needs, and it
 --     holds in all three lanes.
 --   * CROSS-KIND ties resolve by draw order (host creation order on the shared
 --     button). Two exist by construction: container overlay 3 vs dispel tint 3,
---     and prioritised buff tint 4 vs dispel overlay 4.
+--     and prioritized buff tint 4 vs dispel overlay 4.
 --   * Cross-kind ordering was NEVER guaranteed before v92 either — the dispel
---     overlay (offset 4) always outdrew a prioritised buff tint (then offset 2),
+--     overlay (offset 4) always outdrew a prioritized buff tint (then offset 2),
 --     and the buff tint and dispel tint sat tied at offset 1. v92 changes which
 --     cross-kind pairs are ties, not whether they exist.
 --
@@ -2615,22 +4070,22 @@ local FX_SOLID_TEX = "Interface\\Buttons\\WHITE8x8"
 -- just stopped depending on frame creation order.
 --
 -- v59: the tint is a full-fill recolor of the bar, so it is the BASE
--- layer — the buff overlay draws over it while neither is prioritised. It
--- used to sit at offset 2 with the non-prioritised overlay at 1, which
--- put the tint on top of its own spell's overlay. "Prioritise Over Debuff
+-- layer — the buff overlay draws over it while neither is prioritized. It
+-- used to sit at offset 2 with the non-prioritized overlay at 1, which
+-- put the tint on top of its own spell's overlay. "Prioritize Over Debuff
 -- Overlay" still only moves the buff overlay across the DISPEL overlay; it
 -- never affects the tint.
 local FX_LEVEL_HEALTH       = 1
--- Prioritised buff health tint: one above the dispel health tint, so
--- "Prioritise Over Debuff Recolor" lifts the buff tint over it, mirroring the
--- overlay/border Prioritise toggles.
+-- Prioritized buff health tint: one above the dispel health tint, so
+-- "Prioritize Over Debuff Recolor" lifts the buff tint over it, mirroring the
+-- overlay/border Prioritize toggles.
 local FX_LEVEL_HEALTH_PRIO  = 4
 local FX_LEVEL_OVERLAY      = 2
 -- Ceiling of the overlay lane: offset 6 would land the host at parent+7 and TIE
 -- absorbClip (AbsorbBars.lua:99). Unchanged since v59 for that reason.
 local FX_LEVEL_OVERLAY_PRIO = 5
 -- v92: named, because they are rungs of the same scheme and were literals in
--- three places (the two host tables and ApplyFxKinds). The non-prioritised
+-- three places (the two host tables and ApplyFxKinds). The non-prioritized
 -- border moved 11 -> 10 to open the container rung at 11; it stays above the
 -- frame border at parent+10 and crosses nothing on the way (nothing else ever
 -- sat at +11 or +12).
@@ -2723,7 +4178,7 @@ BF.FxOverlayAlpha = FxOverlayAlpha
 -- bar.
 --
 -- LEVELS: nothing renders on the button. Each kind's regions live on its own
--- child host frame at an ABSOLUTE level, so the Prioritise toggles re-level
+-- child host frame at an ABSOLUTE level, so the Prioritize toggles re-level
 -- ONE host and never disturb the kinds sharing the button.
 --
 -- BAKE-ALL: every kind's regions are created at init even for kinds this spell
@@ -3188,14 +4643,14 @@ end
 -- set). FxHostDefsFor names the level hosts this key bakes; the key encodes the
 -- host set, so it is fixed for the button's life.
 --
--- Hosts are BORN at the entry's Prioritise rung (field report 2026-09-10).
--- They used to be baked at the non-prioritised rung from two fixed tables and
--- re-levelled afterwards by ApplyFxKinds (SetSlotHostLevel) -- a post-creation
+-- Hosts are BORN at the entry's Prioritize rung (field report 2026-09-10).
+-- They used to be baked at the non-prioritized rung from two fixed tables and
+-- re-leveled afterwards by ApplyFxKinds (SetSlotHostLevel) -- a post-creation
 -- write, so inside a keystone (auras secret for the whole run) a /reload left
--- every prioritised effect UNDER the dispel visual it was meant to beat, until
+-- every prioritized effect UNDER the dispel visual it was meant to beat, until
 -- the key ended. BuildLevelHosts stamps h._bf_levelOffset from these defs, so
 -- the live SetSlotHostLevel sees the level already applied and no-ops; it stays
--- the live-edit path for a Prioritise toggle flipped later. The numbers are the
+-- the live-edit path for a Prioritize toggle flipped later. The numbers are the
 -- exact ones ApplyFxKinds passes. `fx` is the entry (nil when the slot carries
 -- no hc/bd/ov config -- the name-only Swiftmendable slot); `withName` adds the
 -- Swiftmendable name-mirror host. FRESH per call: read once, inside the init
@@ -3343,7 +4798,15 @@ end
 -- (FxHostDefsFor) and the creation stamp above. Only read on the creation
 -- branch, which is also why the host defs are built THERE: it covers the v88
 -- discard-and-recreate below, and steady state allocates nothing.
+-- `e.sig` (when the entry carries one) is the ID map's signature from
+-- BF:GetSingleBuffSpellSet: the include-map change guard, the sbc / sbb
+-- slots' _bf_sbSid twin. A slot's map is otherwise only stamped at creation
+-- and unpark, so without it an edited rank set (or a different winning entry
+-- for the same primary id) kept matching the old map. Steady state pays one
+-- field compare; Retail's signature is tostring(sid), which never changes for
+-- a key "fx"..sid, so the guard never fires there.
 local function EnsureFxSlot(parent, key, sid, filter, withName, e, smName)
+    local idSig = e and e.sig
     local s = parent._bf_auraSlots and parent._bf_auraSlots[key]
     -- v88: an fx slot whose initButton was interrupted (the engine's late
     -- initializeFrame path, running on a stack that was tainted by then) is
@@ -3386,6 +4849,7 @@ local function EnsureFxSlot(parent, key, sid, filter, withName, e, smName)
             levelHosts = FxHostDefsFor(e, withName),
             candidateFilters = cand,
         })
+        if s then s._bf_fxIdSig = idSig end
     else
         if s.parked then
             -- Re-stamp the include set first (the spell's id set can
@@ -3394,7 +4858,15 @@ local function EnsureFxSlot(parent, key, sid, filter, withName, e, smName)
             local cand = { includeSpellIDs =
                 type(sid) == "table" and sid or { [sid] = true } }
             BF:SetAuraSlotCandidates(parent, key, cand)
+            s._bf_fxIdSig = idSig
             BF:SetAuraSlotVisualDormant(parent, key, false)
+        elseif idSig ~= nil and s._bf_fxIdSig ~= idSig then
+            -- Live slot, changed ID set: re-stamp the include map, as the
+            -- sbc / sbb Layout arms do (allocates only on a real change;
+            -- a live slot's SetAuraSlotCandidates pushes and rebuilds).
+            s._bf_fxIdSig = idSig
+            BF:SetAuraSlotCandidates(parent, key, { includeSpellIDs =
+                type(sid) == "table" and sid or { [sid] = true } })
         end
     end
     return s
@@ -3462,12 +4934,12 @@ local function ApplyFxKinds(parent, s, e, smName)
         return
     end
     if e and e.hc then
-        -- Prioritise re-levels ONLY this kind's host, across the dispel health
+        -- Prioritize re-levels ONLY this kind's host, across the dispel health
         -- tint (offset 3) and the container tint (2); mirrors the ov/bd
-        -- Prioritise toggles. Default (off) is FX_LEVEL_HEALTH, the bottom rung
+        -- Prioritize toggles. Default (off) is FX_LEVEL_HEALTH, the bottom rung
         -- of the tint lane -- v92 made that ordering explicit; it used to TIE
         -- with the dispel tint and be settled by draw order, same winner.
-        -- (The prioritised rung ties the DISPEL OVERLAY at offset 4; cross-kind
+        -- (The prioritized rung ties the DISPEL OVERLAY at offset 4; cross-kind
         -- ties are policy, not oversight -- see the tie policy above.)
         BF:SetSlotHostLevel(parent, key, "hc",
             e.hc.priority and FX_LEVEL_HEALTH_PRIO or FX_LEVEL_HEALTH)
@@ -3476,7 +4948,7 @@ local function ApplyFxKinds(parent, s, e, smName)
         HideFxKind(hosts.hc, "hc")
     end
     if e and e.bd then
-        -- Prioritise re-levels ONLY this kind's host (13 straddles the dispel
+        -- Prioritize re-levels ONLY this kind's host (13 straddles the dispel
         -- border's 12 and the container border's 11); absolute host levels mean
         -- the other kinds never move.
         BF:SetSlotHostLevel(parent, key, "bd",
@@ -3526,6 +4998,10 @@ local function ApplySpellFx(parent, cfg)
     if fxKeys then
         for i = #fxKeys, 1, -1 do fxKeys[i] = nil end
     end
+    -- Combat Status: key -> "in" / "out" for a spell whose effects come from
+    -- an entry that uses it. nil when none does, so :Update pays one nil test.
+    local fxCombat = parent._bf_fxCombat
+    if fxCombat then wipe(fxCombat) end
     local fx = cfg.frameFx
     if fx and next(fx) and parent.healthBar then
         if not fxKeys then fxKeys = {}; parent._bf_fxKeys = fxKeys end
@@ -3547,16 +5023,23 @@ local function ApplySpellFx(parent, cfg)
             if e.hc or e.bd or e.ov then
                 local key = "fx" .. sid
                 local filter = CASTER_SCOPE_FILTERS[e.scope] or "HELPFUL"
-                local s = EnsureFxSlot(parent, key, sid, filter, false, e, nil)
+                -- R2: key = primary id ("fx"..sid), match = the entry's ID map
+                -- (e.ids, projected in the cfg build; Retail { [sid] = true }).
+                local s = EnsureFxSlot(parent, key, e.ids or sid, filter, false, e, nil)
                 if s then
                     BF:SetAuraSlotVisualFilter(parent, key, filter)
                     ApplyFxKinds(parent, s, e, nil)
                     fxKeys[#fxKeys + 1] = key
                     TrackFxKey(parent, key)
+                    if e.combat then
+                        if not fxCombat then fxCombat = {}; parent._bf_fxCombat = fxCombat end
+                        fxCombat[key] = e.combat
+                    end
                 end
             end
         end
     end
+    if fxCombat and next(fxCombat) == nil then parent._bf_fxCombat = nil end
     -- v53: Swiftmendable slot visuals (Resto Druid, spec-gated in the
     -- cfg build): one shared include set — the 4 swiftmendable HoT ids,
     -- player-cast only — driving the same fx restamps plus the name
@@ -3873,7 +5356,7 @@ local function ApplyBuffFilters(parent)
                     bfcAnchoredSids = bfcAnchoredSids or {}
                     local set = bfcAnchoredSids[h.ci]
                     if not set then set = {}; bfcAnchoredSids[h.ci] = set end
-                    set[sid] = true
+                    AddSbSet(set, c, sid)  -- R2: every ID of the entry
                 end
             end
         end
@@ -3885,17 +5368,17 @@ local function ApplyBuffFilters(parent)
         -- container is invisible everywhere; its spell claims are released in
         -- the spellToContainer build (AuraCustomizations.lua), so the spells
         -- reappear in the regular row rather than vanishing.
-        local hidden = not c.singleBuff and c.enabled == false
         -- v65: per-Layout branch gated by the two-gate predicate
         -- (BF:IsContainerPerLayoutActive) -- THIS container's own
         -- perLayoutConfig flag, or the group's Buffs override flag on a CFG
         -- scope. The predicate is false for a nil key, so the old
         -- `groupTypeKey and` guard is folded into it. No hoist here: the answer
         -- is per container now, and this call already sits inside the loop.
-        if c.groupSettings and BF:IsContainerPerLayoutActive(groupTypeKey, c) then
-            local gs = c.groupSettings[groupTypeKey]
-            if gs and gs.showForGroupType == false then hidden = true end
-        end
+        -- 2026-10-13 (Stage 5): the whole `hidden` term -- the global gate,
+        -- this per-Layout gate and the Spec condition below -- is resolved by
+        -- ContainerHiddenOnLayout, the one statement the empty bar and the
+        -- static push read too. The comments below describe its terms.
+        local hidden = ContainerHiddenOnLayout(c, groupTypeKey)
         -- v73 (owner): the shared-tier per-frame-type gate (showOnParty /
         -- showOnRaid / showOnCustomFrames) is removed with its UI -- a shared
         -- container shows on every frame kind. Stale stored flags are
@@ -3907,9 +5390,7 @@ local function ApplyBuffFilters(parent)
         -- UNIT_AURA. Belt over the parked include set below -- a spec-excluded
         -- single buff contributes no spells either, so the group is dormant
         -- anyway; this makes the container invisible rather than merely empty.
-        if not hidden and not BF:IsSingleBuffVisibleForSpec(c) then
-            hidden = true
-        end
+        -- (Applied inside ContainerHiddenOnLayout.)
         vis[ci] = not hidden
         -- ── v65/v92: FLOW-ANCHORED ENTRIES ─────────────────────────────────
         -- These render as an sb<key> group inside their HOST's container
@@ -3953,6 +5434,13 @@ local function ApplyBuffFilters(parent)
         if c.singleBuff and SingleBuffSlotMode() then
             local skey = "sbc" .. ci
             local s = parent._bf_auraSlots and parent._bf_auraSlots[skey]
+            -- Duration Bar plan §5.1: Show Icon OFF with nothing drawn in its
+            -- place ("none", per Layout -- GetSingleBuffIconMode) = the entry
+            -- has no icon display, so its slot is PARKED below
+            -- (and not built by EnsureBuffContainers). Resolved once here and
+            -- reused by the repair gate and the park decision.
+            local iconNone = (BF.GetSingleBuffIconMode
+                and BF.GetSingleBuffIconMode(c, groupTypeKey, ac)) == "none"
             -- v88: before maintaining the slot, make sure it is WORTH
             -- maintaining. A button whose styling walk was interrupted (a
             -- denial on a tainted stack while auras were secret -- the raid
@@ -3964,7 +5452,10 @@ local function ApplyBuffFilters(parent)
             -- of this whole arm is ONE boolean read -- nothing is re-derived and
             -- nothing is called. Everything past the `not s.healthy` is
             -- unreachable on a working slot.
-            if s and not s.healthy
+            -- (A slot about to be parked for Show Icon OFF is not repaired: a
+            -- rebuild would burn the attempt budget on a button nothing shows.
+            -- The repair runs on the first pass after the icon comes back.)
+            if s and not s.healthy and not iconNone
                and RepairSingleBuffSlot(parent, ci, c, ac, groupTypeKey) then
                 local rsid = BF:GetSingleBuffSpellID(c)
                 if rsid then
@@ -3977,7 +5468,7 @@ local function ApplyBuffFilters(parent)
                 -- v92: any host, not just Buffs (sbFlowed above) -- a slot is
                 -- the "positions itself" shape, and an entry flowing inside
                 -- someone else's container does not position itself.
-                local park = hidden or (not sid) or sbFlowed
+                local park = hidden or (not sid) or sbFlowed or iconNone
                     or not BF:IsContainerCreationRelevant("buff", ci)
                 -- v88d: the SECOND thing that can silence a slot that WAS
                 -- created in the window. `main` on the buffs container is
@@ -3998,10 +5489,12 @@ local function ApplyBuffFilters(parent)
                     BF:SetAuraSlotVisualDormant(parent, skey, true)
                 else
                     BF:SetAuraSlotVisualFilter(parent, skey, ContainerAuraFilter(c))
-                    if s._bf_sbSid ~= sid then
-                        s._bf_sbSid = sid
+                    -- R2: compare the ID map's signature, stamp the map.
+                    local sbMap, sbSig = SbSet(c, sid)
+                    if s._bf_sbSid ~= sbSig then
+                        s._bf_sbSid = sbSig
                         BF:SetAuraSlotCandidates(parent, skey,
-                            { includeSpellIDs = { [sid] = true } })
+                            { includeSpellIDs = sbMap })
                     end
                     BF:SetAuraSlotVisualDormant(parent, skey, false)
                     -- v88h: the button's rect and visuals are FORBIDDEN to
@@ -4067,6 +5560,14 @@ local function ApplyBuffFilters(parent)
                 end
             end
         end
+        -- Duration Bar plan §5.5 (Stage 3): the entry's self-positioned bar
+        -- slot, sbb<ci>. Its own arm, OUTSIDE the slot-mode block above: a
+        -- bar is always a slot and does not care where the icon went.
+        if c.singleBuff then
+            MaintainSingleBuffBarSlot(parent, ci, c, hidden, groupTypeKey)
+            -- Stage 5: the bar's empty-state art, under the same terms.
+            MaintainSingleBuffEmptyBar(parent, ci, c, hidden, groupTypeKey)
+        end
         if cc then
             local spells = cfg.containerSpells[ci]
             local custList = cfg.customized and cfg.customized[ci]
@@ -4125,7 +5626,7 @@ local function ApplyBuffFilters(parent)
             -- every single buff and this whole block never ran -- the entry's
             -- Icon/Effects/Cooldown Text settings silently did nothing on the
             -- 12.1 live path.
-            if sbSid and BF.GetSingleBuffVisualRoot and BF.GetSingleBuffVisualRoot(c) then
+            if SingleBuffUsesDerivedSpec(c, sbSid) then
                 -- Derived EXACTLY as the creation site in EnsureBuffContainers
                 -- derives it (SingleBuffSpec + ApplyContainerBorder +
                 -- ApplyContainerDuration). The two Apply* calls no-op for a
@@ -4310,10 +5811,18 @@ local function ApplyBuffFilters(parent)
         if sl then
             local n2 = #containers
             for skey in pairs(sl) do
-                local idx = skey:match("^sbc(%d+)$")
+                -- sbb<ci>: the Duration Bar slots (Stage 3), same orphan rule.
+                local idx = skey:match("^sbc(%d+)$") or skey:match("^sbb(%d+)$")
                 if idx and tonumber(idx) > n2 then
                     BF:SetAuraSlotVisualDormant(parent, skey, true)
                 end
+            end
+        end
+        -- Stage 5: the empty-bar art of an index past the array, same rule.
+        local ea = parent._bf_sbEmpty
+        if ea then
+            for ci in pairs(ea) do
+                if ci > #containers then HideSingleBuffEmptyArt(parent, ci) end
             end
         end
     end
@@ -4346,6 +5855,9 @@ function BuffsAndContainers:Create(parent)
     -- v92: drop the per-host wrap-budget memo (see MaxSingleBuffSizeFor). One
     -- of the two entries that resolve container geometry after a settings edit.
     InvalidateSingleBuffHostSizes()
+    -- Stage 5: and the frame's static push (BF.SingleBuffBarPushFor), for the
+    -- same reason.
+    BF.InvalidateSingleBuffBarPush(parent)
     EnsureBuffContainers(parent)
     ApplyBuffFilters(parent)
 end
@@ -4418,6 +5930,8 @@ function BuffsAndContainers:Layout(parent)
         -- and in :Create is what keeps the memo honest; within one frame's
         -- pass it then answers all three hosts from ONE container walk.
         InvalidateSingleBuffHostSizes()
+        -- Stage 5: the frame's static push, re-derived on first use this pass.
+        BF.InvalidateSingleBuffBarPush(parent)
         EnsureBuffContainers(parent)
         local geo = BuffGeneralGeo(parent)
         BF:ApplyAuraGridGeometry(parent, "buffs", geo)
@@ -4517,8 +6031,7 @@ function BuffsAndContainers:Update(frame, unit)
         BF:EnsureFrameAuraContainers(frame)
     end
     local ac2 = BF:GetAuraCacheForFrame(frame)
-    local ph = frame._bf_parentHeader or frame:GetParent()
-    local moduleOff = ph and ph.isCustomFrame and ph.moduleShowBuffs == false
+    local moduleOff = BuffsModuleOff(frame)
     -- ── v79: NO BUFFS AT ALL on a unit we cannot assist. ──────────────────
     -- Owner requirement: show nothing rather than garbage.
     --
@@ -4597,23 +6110,39 @@ function BuffsAndContainers:Update(frame, unit)
         if not (anchored and anchored[ci]) then
             -- v79: custom buff containers narrow by include set too, so they
             -- carry the same assistable gate as the general row above.
+            -- Combat Status: one upvalue nil test while no entry uses it.
             local shown = canAssist and (not moduleOff) and (not suppressed)
                 and (not vis or vis[ci] ~= false)
+                and not (sbCombatHidden and sbCombatHidden[ci])
             BF:SyncAuraGridContainer(frame, "bfc" .. ci, unit, shown)
             -- v82: same shown term for the slot-mode twin. A cheap no-op
             -- (one table lookup) unless the entry actually runs as a slot.
             BF:SyncAuraSlotVisual(frame, "sbc" .. ci, unit, shown)
         end
+        -- Duration Bar plan §5.5 (Stage 3): the entry's bar slot takes the
+        -- SAME shown term as its sbc twin, but OUTSIDE the anchored check --
+        -- a self-positioned bar renders even while the entry's ICON flows in
+        -- a host. One table lookup (a no-op) for an entry without a bar.
+        BF:SyncAuraSlotVisual(frame, "sbb" .. ci, unit,
+            canAssist and (not moduleOff) and (not suppressed)
+            and (not vis or vis[ci] ~= false)
+            and not (sbCombatHidden and sbCombatHidden[ci]))
     end
     -- v46: per-spell frame-effect slots (precomputed key list; nil
     -- on frames with no configured effects — zero cost then).
     local fxKeys = frame._bf_fxKeys
     if fxKeys then
+        -- Combat Status: an effect follows its entry's condition (owner,
+        -- 2026-11-15). nil on a frame with no gated effect.
+        local fxCombat = frame._bf_fxCombat
         for i = 1, #fxKeys do
+            local key = fxKeys[i]
+            local m = fxCombat and fxCombat[key]
             -- v93: frame effects are aura-driven too (health tint, border,
             -- overlay), so they carry the same suppression term as the icons.
-            BF:SyncAuraSlotVisual(frame, fxKeys[i], unit,
-                (not moduleOff) and (not suppressed))
+            BF:SyncAuraSlotVisual(frame, key, unit,
+                (not moduleOff) and (not suppressed)
+                and (m == nil or (m == "in") == sbInCombat))
         end
     end
 end
@@ -4794,7 +6323,7 @@ function BF:_DebugSingleBuffSlots(arg)
                                     tostring(sgeo.offsetX), tostring(sgeo.offsetY),
                                     tostring(sgeo.growDirection))
                                 add("      lift: target=%s pwrShown=%s abovePwr=%s",
-                                    lift and (lift:GetName() or "clipFrame")
+                                    lift and (lift:GetName() or "container")
                                         or "|cff888888none (parent)|r",
                                     frame.powerBar and SafeGet(frame.powerBar, "IsShown")
                                         or "|cff888888no bar|r",

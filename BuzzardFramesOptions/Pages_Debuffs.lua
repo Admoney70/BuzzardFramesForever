@@ -53,6 +53,8 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- ── The two resolved views ─────────────────────────────────────
 --
@@ -1550,6 +1552,7 @@ local function PresetFilterGroups(effect)
           menuStyle = { minWidth = 230 },
           items = function()
               local out = {}
+              if ForeverUI() then return ForeverUI().LongTermDebuffItems(LONG_TERM_DEBUFFS, GlobalAuraItem) end -- [FOREVER]
               for i = 1, #LONG_TERM_DEBUFFS do
                   out[i] = GlobalAuraItem(LONG_TERM_DEBUFFS[i])
               end
@@ -1940,7 +1943,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelIndicatorOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("dispel indicator"),
-              hidden = DispelHidden, onChange = effect,
+              hidden = ForeverHide(DispelHidden), onChange = effect, -- [FOREVER] F8
               set = Setter("dispelIndicatorOnlyIfReady", function()
                   local bf = BF()
                   if bf and bf.UpdateDispelCooldownTracking then
@@ -2040,7 +2043,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelOverlayOnlyIfReady", wide = true, newRow = true,
               desc = ONLY_IF_READY_DESC:format("debuff overlay"),
-              hidden = OverlayHidden, disabled = OverlayOff, onChange = effect,
+              hidden = ForeverHide(OverlayHidden), disabled = OverlayOff, onChange = effect, -- [FOREVER] F8
               set = Setter("dispelOverlayOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()
@@ -2090,7 +2093,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelHealthColorOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("health color change"),
-              hidden = HealthColorSubHidden, onChange = effect,
+              hidden = ForeverHide(HealthColorSubHidden), onChange = effect, -- [FOREVER] F8
               set = Setter("dispelHealthColorOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()
@@ -2141,7 +2144,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelBorderOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("debuff border"),
-              hidden = BorderHidden, disabled = BorderOff, onChange = effect,
+              hidden = ForeverHide(BorderHidden), disabled = BorderOff, onChange = effect, -- [FOREVER] F8
               set = Setter("dispelBorderOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()

@@ -67,6 +67,8 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 local function UF() return BuzzardFramesOptions.UnitFramesShared end
 
@@ -305,7 +307,7 @@ function PAGES.altPowerTab(spec)
                   { wide = true,
                     desc = "Show a secondary power bar when in a shapeshift form." }),
         }},
-        { title = "Druid Specializations", preset = "form", hidden = altOff,
+        { title = "Druid Specializations", preset = "form", hidden = ForeverHide(altOff), -- [FOREVER] F4
           fields = {
             { control = "note", wide = true,
               text = "Enable/disable the alt power (mana) bar per Druid "
@@ -543,7 +545,7 @@ function PAGES.resourceTab(spec)
                   p.oufResourceBarEmptyDim = v / 100
               end },
         }},
-        { title = "Partial Fill", preset = "form", hidden = rbOff, fields = {
+        { title = "Partial Fill", preset = "form", hidden = ForeverHide(rbOff), fields = { -- [FOREVER] F10
             uf.Sw("prof.oufResourceBarPartialFill", "Show Partial Fill",
                   ResourceUpdate,
                   { wide = true,

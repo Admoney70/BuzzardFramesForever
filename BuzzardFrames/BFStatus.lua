@@ -49,6 +49,9 @@ local GetRaidTargetIndex      = GetRaidTargetIndex
 local GetReadyCheckStatus     = GetReadyCheckStatus
 local GetSpecialization       = GetSpecialization
 local GetSpecializationRole   = GetSpecializationRole
+-- Forever has no global GetSpecialization / GetSpecializationRole (nil
+-- captures above); every spec-role read below is skipped there.
+local IS_FOREVER = BF.isForever -- [FOREVER]
 local UnitGetTotalAbsorbs     = UnitGetTotalAbsorbs
 local UnitGetTotalHealAbsorbs = UnitGetTotalHealAbsorbs
 
@@ -547,7 +550,7 @@ local function GetEffectivePowerType(unit)
 			if role == "HEALER" then
 				return 0
 			end
-			if UnitIsUnit(unit, "player") then
+			if not IS_FOREVER and UnitIsUnit(unit, "player") then -- [FOREVER]
 				local spec = GetSpecialization()
 				if spec and GetSpecializationRole(spec) == "HEALER" then
 					return 0
@@ -637,6 +640,7 @@ function DruidMana:IsActive(unit)
 	-- Must be healer spec
 	local role = UnitGroupRolesAssigned("player")
 	if role == "HEALER" then return true end
+	if IS_FOREVER then return false end -- [FOREVER]
 	local spec = GetSpecialization()
 	if spec and GetSpecializationRole(spec) == "HEALER" then return true end
 	return false
@@ -1010,15 +1014,17 @@ local function BuildComposedName(tp)
 	-- defaultName: nil on default config, exactly like Grid2's shipped
 	-- DbSetStatusDefaultValue("name", {type="name"}) — parity, not a fix.
 	local defaultName = tp.defaultName
+	local nameOf = UnitName
+	if IS_FOREVER and tp.showLastName then nameOf = BF.Forever.UnitNameWithSurname end -- [FOREVER] Show Last Name
 	local getText
 	if tp.transliterateCyrillicNames then
 		getText = function(unit)
-			local name = UnitName(unit)
+			local name = nameOf(unit)
 			return (name and strCyr2Lat(name)) or (defaultName == 1 and unit) or defaultName
 		end
 	else
 		getText = function(unit)
-			return UnitName(unit) or (defaultName == 1 and unit) or defaultName
+			return nameOf(unit) or (defaultName == 1 and unit) or defaultName
 		end
 	end
 	-- BF-only extra, same composition pattern: capitalize.
@@ -1520,7 +1526,7 @@ function Role:GetRole(unit)
 	local roleUnit = BF.owner_of_unit and BF.owner_of_unit[unit] or unit
 	local role = NotSecretOr(UnitGroupRolesAssigned(roleUnit), "NONE")  -- 12.1: secret identity ⇒ no icon
 	-- Solo: infer from spec
-	if (not role or role == "NONE") and UnitIsUnit(roleUnit, "player") then
+	if not IS_FOREVER and (not role or role == "NONE") and UnitIsUnit(roleUnit, "player") then -- [FOREVER]
 		local specIndex = GetSpecialization()
 		if specIndex then
 			role = GetSpecializationRole(specIndex)
@@ -1874,7 +1880,7 @@ BF:RegisterStatus(Summon)
 -- ============================================================
 local Vehicle = statusProto:new("vehicle")
 
--- 12.1 vehicles come in TWO flavours. UI vehicles flip UnitHasVehicleUI and
+-- 12.1 vehicles come in TWO flavors. UI vehicles flip UnitHasVehicleUI and
 -- remap the secure unit (the only kind Grid2's StatusVehicle sees). Multi-seat
 -- transport vehicles flip only UnitUsingVehicle/UnitInVehicle — no vehicle
 -- bar, no unit remap — and were invisible to this status (owner-reported on
@@ -2306,7 +2312,13 @@ local function BindIndicators()
 	-- of them exactly one Update instead, and each is change-guarded
 	-- internally. powerBar is NOT bound: its visibility does not depend on
 	-- death (see BF:ShouldShowPowerBar), so a death dispatch would be wasted.
-	bind("death",          "statusOverlay", "nameText", "healthBar", "healthBarColor", "healthText", "castBar", "absorbBars", "rangeAlpha", "aggroHighlight")
+	-- missingRaidBuff (2026-11-17): owner rule -- its icons never show on a
+	-- dead, offline or not-visible unit. Its Update already tests all three,
+	-- but its other bindings ("buffs", "offline") do not fire on a death or a
+	-- resurrection, so icons shown just before a death stayed on the dead
+	-- frame. Grid2 parity: alive-dependent statuses re-evaluate on
+	-- Grid_UnitDeadUpdated (GridStatusLoad.lua unitAlive filter).
+	bind("death",          "statusOverlay", "nameText", "healthBar", "healthBarColor", "healthText", "castBar", "absorbBars", "rangeAlpha", "aggroHighlight", "missingRaidBuff")
 	-- Flag changes (AFK) → status overlay, healthBarColor (AFK color override),
 	-- nameText (refactor review M1: AFK append-to-name and AFK name color were
 	-- previously repainted only via StatusText_Overlay's per-UNIT_HEALTH

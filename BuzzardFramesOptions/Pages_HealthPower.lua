@@ -36,6 +36,7 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The section as it reads right now: the merged view for the modifying
 -- Layout, which degrades to the global wherever no subtab is per-Layout.
@@ -609,7 +610,7 @@ end
 -- The two colors whose Ace setters MUTATED the stored table in place
 -- rather than replacing it (deadBackgroundColor, hostileColor) keep that
 -- shape, through SectionKeyTable -- the router that answers with the
--- table to mutate, never the merged view, and materialises the per-flat
+-- table to mutate, never the merged view, and materializes the per-flat
 -- copy on demand.
 local function ColorInPlace(key, label, effect, opts)
     local f = Color(key, label, effect, opts)
@@ -897,7 +898,7 @@ function PAGES.power()
                     local ip = GetIP()
                     return ip and ip.showAllPowerBars
                 end }),
-            Sw("showPowerBarBloodDK", "Show Blood DK Power Bars", PowerBarsShown, {
+            Sw("showPowerBarBloodDK", "Show Blood DK Power Bars", PowerBarsShown, ForeverUI() and ForeverUI().AlwaysHiddenOpts() or { -- [FOREVER] F5 no Death Knights
                 hidden = function()
                     local ip = GetIP()
                     return ip and ip.showAllPowerBars

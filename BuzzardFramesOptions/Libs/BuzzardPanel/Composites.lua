@@ -232,6 +232,16 @@ local PAD_SIZE = SLIDER_H * 2                   -- 42
 local PAD_GAP  = 3
 local PAD_CELL = (PAD_SIZE - PAD_GAP * 2) / 3   -- 12
 
+-- The height of the pad-and-offsets block: the pad (with the gap above it)
+-- or the two offset rows, whichever is taller. The rows carry their min/max
+-- line, so they are the taller side. ONE number for both `measure` (what
+-- the page reserves) and `create` (the widget's own frame): the frame used
+-- to stay pad-sized while the page reserved the rows, so the widget's rect
+-- ended above the Y row it drew.
+local function PadBlockH()
+    return math.max(PAD_SIZE + PAD_GAP, (ns.SLIDER_H_COMPACT_RANGE or SLIDER_H) * 2)
+end
+
 -- Which justification a point implies. Used when the anchor changes: the
 -- justification follows it, and stays freely adjustable afterwards.
 local JUSTIFY_FOR = {
@@ -258,22 +268,20 @@ local function BuildPad(w)
         b.border, b.fill = ns.BorderedRound(b, 4, "BACKGROUND", "BORDER")
         b.point      = name
         b.pointName  = p[4] or name
-        -- NO tooltip on a cell. A 3x3 grid of squares says where each one
-        -- points by where it IS, so naming them was nine tooltips telling
-        -- the reader what they could already see, popping up under the
-        -- cursor while they aimed at one.
-        --
-        -- `bpTipOwn` stays: it is what stops the FIELD's tooltip being
-        -- attached to all nine cells instead, which is the same nuisance
-        -- with worse text. The pad's own frame still carries it.
+        -- Each cell NAMES ITS POINT on hover -- "Top", "Top Right" --
+        -- (owner, 2026-10-14; reverses the earlier no-tooltip ruling).
+        -- `bpTipOwn` is what stops the FIELD's tooltip being attached to
+        -- the nine cells by AttachFieldTooltip's walk.
         b.bpTipOwn = true
         b:SetScript("OnEnter", function(self)
             self.hovered = true
             if w.repaintPad then w.repaintPad() end
+            if w.bpApp then ns.context.Show(self, w.bpApp, self.pointName) end
         end)
         b:SetScript("OnLeave", function(self)
             self.hovered = false
             if w.repaintPad then w.repaintPad() end
+            ns.context.Hide()
         end)
         pad.cells[i] = b
     end
@@ -427,6 +435,48 @@ local function LayOffsets(w, top, right)
     end
 end
 
+-- A tooltip of a sub-control's OWN, on a frame whose scripts its control
+-- re-sets on every apply (a slider's number box gets InstallHover's
+-- SetScript each time, which drops any HookScript chain). So the CURRENT
+-- script is wrapped after each apply -- and only when it is not already
+-- this wrapper, so a frame whose scripts apply leaves alone (the slider
+-- track) does not collect a wrapper per render. The text lives on the
+-- frame, so a pooled widget reused for another field shows that field's.
+local function OwnTipEnter(self, ...)
+    local inner = self.bpOwnTipInner
+    if inner then inner(self, ...) end
+    local t = self.bpOwnTip
+    if t then ns.context.Show(self, t.app, t.title, t.desc) end
+end
+local function OwnTipLeave(self, ...)
+    local inner = self.bpOwnTipInnerLeave
+    if inner then inner(self, ...) end
+    if self.bpOwnTip then ns.context.Hide() end
+end
+local function OwnTip(frame, app, title, desc)
+    if not (frame and frame.GetScript) then return end
+    frame.bpTipOwn = true
+    frame.bpOwnTip = { app = app, title = title, desc = desc }
+    local enter = frame:GetScript("OnEnter")
+    if enter ~= OwnTipEnter then
+        frame.bpOwnTipInner = enter
+        frame:SetScript("OnEnter", OwnTipEnter)
+    end
+    local leave = frame:GetScript("OnLeave")
+    if leave ~= OwnTipLeave then
+        frame.bpOwnTipInnerLeave = leave
+        frame:SetScript("OnLeave", OwnTipLeave)
+    end
+end
+
+-- What each offset row says on hover (owner, 2026-10-14). The rows are
+-- offsets FROM the pad's point, which is the one thing a bare "X" / "Y"
+-- caption cannot say.
+local OFFSET_TIPS = {
+    x = "Horizontal offset from the Anchor Point",
+    y = "Vertical offset from the Anchor Point",
+}
+
 local function OffsetNodes(w, node, ctx)
     local sx = Sub(w, "x", "slider")
     local sy = Sub(w, "y", "slider")
@@ -439,6 +489,15 @@ local function OffsetNodes(w, node, ctx)
     Bind(w, "y", SubNode(node, ctx, "y",
         SideBox({ control = "slider", min = lo, max = hi,
                   compact = true, range = true })), ctx, sy)
+    -- Each row's own tooltip, on the frames that take the mouse: the
+    -- track and the number box. The row's frame is marked as well, so the
+    -- field's walk (AttachFieldTooltip, two levels down) does not put the
+    -- field's description over them.
+    for key, sub in pairs({ x = sx, y = sy }) do
+        sub.w.bpTipOwn = true
+        OwnTip(sub.w.slider, ctx.app, OFFSET_TIPS[key])
+        OwnTip(sub.w.box,    ctx.app, OFFSET_TIPS[key])
+    end
     -- The axis alone; the heading above them carries the noun.
     Caption(w, "x", "X")
     Caption(w, "y", "Y")
@@ -454,7 +513,7 @@ local anchor = {}
 function anchor.create(app, parent)
     local w = CreateFrame("Frame", nil, parent)
     w.bpApp = app
-    w:SetHeight(PAD_SIZE)
+    w:SetHeight(PadBlockH())
     BuildPad(w)
     -- A cell's worth of gap above the grid, the same PAD_GAP that separates
     -- its rows: flush with the widget's top the pad read as pinned to the
@@ -510,11 +569,14 @@ function anchor.measure(field)
     local wide   = leftW + capW + 4 + OFFSET_W
     -- The heading plus two rows that carry their range is taller than the
     -- pad, so the widget is as tall as whichever side is taller rather than
-    -- as tall as the pad it used to match exactly.
-    local rows = (ns.SLIDER_H_COMPACT_RANGE or SLIDER_H) * 2
-    return wide, wide - 60, math.max(PAD_SIZE + PAD_GAP, rows)
+    -- as tall as the pad it used to match exactly. The same number create
+    -- gives the frame (PadBlockH).
+    return wide, wide - 60, PadBlockH()
 end
 anchor.stretch = false
+-- What the field's LABEL says on hover, ahead of the field's own `desc`
+-- (Context.lua DescOf). Owner, 2026-10-14.
+anchor.leadDesc = "The point on the frame to attach to."
 
 -- ── Offsets (X and Y, no pad) ──────────────────────────────────
 --
@@ -852,7 +914,7 @@ local textpos = {}
 function textpos.create(app, parent)
     local w = CreateFrame("Frame", nil, parent)
     w.bpApp = app
-    w:SetHeight(PAD_SIZE + 12 + 13 + ROW_H + 4)
+    w:SetHeight(PadBlockH() + 12 + 13 + ROW_H + 4)   -- = textpos.measure
     BuildPad(w)
     -- A cell's worth of gap above the grid, the same PAD_GAP that separates
     -- its rows: flush with the widget's top the pad read as pinned to the
@@ -887,7 +949,9 @@ function textpos.apply(w, node, ctx)
     -- anything else belongs on its own line rather than wedged in.
     local function layout(self)
         LayOffsets(self, 0, self:GetWidth())
-        local top = PAD_SIZE + 10
+        -- Below the pad-and-offsets block, not the pad: the Y row and its
+        -- range line reach past the pad.
+        local top = PadBlockH() + 10
         self.caps.justify:ClearAllPoints()
         self.caps.justify:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -top)
         local j = self.subs.justify.w
@@ -913,9 +977,7 @@ function textpos.measure()
     -- The pad-and-offsets block, then the justification row under it. The
     -- block is as tall as its taller half, which is now the heading plus the
     -- two rows.
-    local block = math.max(PAD_SIZE + PAD_GAP,
-                           (ns.SLIDER_H_COMPACT_RANGE or SLIDER_H) * 2)
-    return wide, wide - 60, block + 12 + 13 + ROW_H + 4
+    return wide, wide - 60, PadBlockH() + 12 + 13 + ROW_H + 4
 end
 textpos.stretch = false
 

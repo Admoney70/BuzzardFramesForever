@@ -38,6 +38,8 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- The section as it reads right now: the merged view for the modifying
 -- Layout, which degrades to the global wherever no subtab is per-Layout.
@@ -60,7 +62,7 @@ end
 -- view, writes go to WriteSectionKey. The composites need one more level --
 -- an anchor pad binds `roleIconPosition.point` -- so a key whose value is a
 -- table answers with a wrapper of its own, reading from the view and
--- writing through SectionKeyTable, which materialises the per-flat copy on
+-- writing through SectionKeyTable, which materializes the per-flat copy on
 -- demand exactly as the Ace setters do.
 --
 -- The alternative was a get/set pair on all sixty-odd fields, and with it
@@ -158,19 +160,27 @@ local function RoleIconsShown()
     RoleIcons()
 end
 
+-- Repaint the preview frames' test icons (Raid Target, Leader/Assistant,
+-- Ping, Missing Raid Buff). Every Show switch on those tabs calls it too, so
+-- a test icon goes the moment its icon is turned off.
+local function IconTests()
+    local bf = BF()
+    if bf and bf.RefreshPreviewIconTests then bf:RefreshPreviewIconTests() end
+end
+
 local function RaidTargetIcons()
     ForEachFrame(function(bf, f) bf:UpdateRaidTargetIcon(f) end)
+    IconTests()
 end
 
 local function LeaderIcons()
     ForEachFrame(function(bf, f) bf:UpdateLeaderIcon(f) end)
+    IconTests()
 end
 
 -- The ping pin is a MIRROR of the default UI's raid-frame ping receivers,
 -- so turning it on is a rebuild rather than a restyle. Ensure comes first:
--- with the unit-frames module off the mirror may not exist yet, and
--- RebuildPingMirror alone cannot start the ticker (SetPingTicker bails on
--- `not pingMirror`).
+-- with the unit-frames module off the mirror may not exist yet.
 local function PingIndicator()
     local bf = BF()
     if not bf then return end
@@ -180,16 +190,23 @@ local function PingIndicator()
     end)
     if bf.EnsurePingMirror  then bf:EnsurePingMirror()  end
     if bf.RebuildPingMirror then bf:RebuildPingMirror() end
+    IconTests()
 end
 
 -- Turning the toggle off in every Layout unregisters the tracker, so a
 -- reader who does not use the feature pays nothing per aura update.
 -- Turning it on registers and backfills.
+-- Also the side effect of Enabled Buffs and the Instance Type condition:
+-- both decide WHICH buffs get a tracker.
 local function MissingRaidBuffTrackers()
     local bf = BF()
     if not bf then return end
     if bf.EnsureMissingRaidBuffTrackers then bf:EnsureMissingRaidBuffTrackers() end
     bf:RefreshAllCustomContainersWithRebuild()
+    -- A tracker that stays registered (another Layout still wants it) still
+    -- has to redraw under this Layout's new ticks.
+    if bf.RefreshMissingRaidBuffOnly then bf:RefreshMissingRaidBuffOnly() end
+    IconTests()
 end
 
 local function MissingRaidBuffLook()
@@ -197,6 +214,7 @@ local function MissingRaidBuffLook()
     if not bf then return end
     if bf.RefreshMissingRaidBuffOnly then bf:RefreshMissingRaidBuffOnly()
     else bf:RefreshAllAuras() end
+    IconTests()
 end
 
 local function StatusIcons()
@@ -272,6 +290,28 @@ local function TestField(entry)
                 if b[entry.update] then b[entry.update](b, f) end
             end)
             StatusIcons()
+        end,
+    }
+end
+
+-- The same shape for the other Icons tabs. Their icons have no live Update
+-- on a preview frame, so the switch repaints through the preview painter
+-- (Preview/PreviewData.lua ApplyPreviewIconTests) instead of an indicator.
+-- `showKey` is the icon's own Show switch: the test row is there only while
+-- it is on, as on Status Icons.
+local function IconTestField(test, label, showKey)
+    return {
+        control = "switch", label = label,
+        id = test, default = false, disabled = "combat",
+        desc = "Show this icon on the preview frames. Resets on reload.",
+        hidden = function() return not ROOT[showKey] end,
+        get = function() local bf = BF(); return bf and bf.db.global[test] end,
+        set = function(_, _, v)
+            if InCombatLockdown() then return end
+            local bf = BF()
+            if not bf then return end
+            bf.db.global[test] = v
+            IconTests()
         end,
     }
 end
@@ -595,7 +635,7 @@ local PAGES = {}
 
 function PAGES.roleIcons()
     return {
-        { title = "Role Icons", preset = "form",
+        { title = "Show Role Icons", preset = "form",
           toggle = Gate("showRoleIcons", "Show Role Icons", RoleIconsShown),
           fields = {
             { control = "segmented", label = "Role Icon Style",
@@ -626,11 +666,19 @@ end
 
 function PAGES.raidTarget()
     return {
-        { title = "Raid Target Markers", preset = "form",
-          toggle = Gate("showRaidTargetIcon", "Show Raid Target Icon", RaidTargetIcons),
+        { title = "Show Raid Target Markers", preset = "form",
+          toggle = Gate("showRaidTargetIcon", "Show Raid Target Markers", RaidTargetIcons),
           fields = {
             Sl("raidTargetIconSize", "Icon Size", 8, 32, LayoutFrames),
-            Pos("raidTargetIconPosition", "Position", LayoutFrames),
+        }},
+        { title = "Position", preset = "form", fields = {
+            Pos("raidTargetIconPosition", "Location", LayoutFrames),
+        }},
+        { title = "Test Raid Target Marker", preset = "form",
+          hidden = function() return not ROOT.showRaidTargetIcon end,
+          fields = {
+            IconTestField("testRaidTargetIcon", "Test Raid Target Marker",
+                          "showRaidTargetIcon"),
         }},
     }
 end
@@ -644,67 +692,267 @@ function PAGES.pingIndicator()
                   .. "works while grouped and needs |cffffff00Show Pings on Raid "
                   .. "Frames|r enabled in the game's Ping settings." },
         }},
-        { title = "Ping Indicator", preset = "form",
-          toggle = Gate("showPingIndicator", "Show Ping Indicator", PingIndicator),
+        { title = "Show Ping Indicators", preset = "form",
+          toggle = Gate("showPingIndicator", "Show Ping Indicators", PingIndicator),
           fields = {
             Sl("pingIndicatorSize", "Indicator Size", 8, 48, LayoutFrames),
+            Sw("pingIgnoreRangeFade", "Don't Fade Pings on Out of Range Units",
+               LayoutFrames,
+               { desc = "Keep the ping pin at full opacity on out-of-range "
+                     .. "frames, ignoring both Range Fade and Darken Out of "
+                     .. "Range." }),
+        }},
+        -- Its own card (owner layout, 2026-10-24), and NOT gated in its own
+        -- header: it goes with the main card's switch. The gate's click
+        -- re-renders the page, which re-asks this predicate.
+        { title = "Position", preset = "form",
+          hidden = function() return not ROOT.showPingIndicator end,
+          fields = {
             Pos("pingIndicatorPosition", "Position", LayoutFrames),
+        }},
+        { title = "Test Ping Indicator", preset = "form",
+          hidden = function() return not ROOT.showPingIndicator end,
+          fields = {
+            IconTestField("testPingIndicator", "Test Ping Indicator",
+                          "showPingIndicator"),
         }},
     }
 end
 
 function PAGES.leaderAssistant()
     return {
-        { title = "Leader Icon", preset = "form",
-          toggle = Gate("showLeaderIcon", "Show Leader Icon", LeaderIcons),
+        { title = "Show Leader Icons", preset = "form",
+          toggle = Gate("showLeaderIcon", "Show Leader Icons", LeaderIcons),
           fields = {
             Sl("leaderIconSize", "Icon Size", 8, 24, LayoutFrames),
-            Pos("leaderIconPosition", "Position", LayoutFrames),
         }},
-        { title = "Assistant Icon", preset = "form",
-          toggle = Gate("showAssistantIcon", "Show Assistant Icon", LeaderIcons),
+        { title = "Leader Icon Position", preset = "form", fields = {
+            Pos("leaderIconPosition", "Location", LayoutFrames),
+        }},
+        { title = "Show Assistant Icons", preset = "form",
+          toggle = Gate("showAssistantIcon", "Show Assistant Icons", LeaderIcons),
           fields = {
             Sl("assistantIconSize", "Icon Size", 8, 24, LayoutFrames),
-            Pos("assistantIconPosition", "Position", LayoutFrames),
+        }},
+        { title = "Assistant Icon Position", preset = "form", fields = {
+            Pos("assistantIconPosition", "Location", LayoutFrames),
+        }},
+        { title = "Test Leader/Assistant Icons", preset = "form",
+          hidden = function()
+              return not (ROOT.showLeaderIcon or ROOT.showAssistantIcon)
+          end,
+          fields = {
+            IconTestField("testLeaderIcon",    "Test Leader Icon",    "showLeaderIcon"),
+            IconTestField("testAssistantIcon", "Test Assistant Icon", "showAssistantIcon"),
         }},
     }
+end
+
+-- The Instance Type buckets, in display order -- the Buzzard Auras Load
+-- Conditions grid (BuzzardAuras/Options.lua INSTANCE_TYPES), same keys as
+-- BF.ResolveMissingRaidBuffInstanceBucket. Delve does not exist on Forever.
+local MRB_INSTANCE_TYPES = {
+    { key = "world",   label = "Open World" },
+    { key = "dungeon", label = "Dungeon" },
+    { key = "delve",   label = "Delve", retailOnly = true },
+    { key = "raid",    label = "Raid" },
+    { key = "arena",   label = "Arena" },
+    { key = "bg",      label = "Battleground" },
+}
+
+local function ClassLabel(cls)
+    local name = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[cls]) or cls
+    local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[cls]
+    if c and c.colorStr then return "|c" .. c.colorStr .. name .. "|r", name end
+    return name, name
+end
+
+-- Enabled Buffs: one row per class -- a class switch that ticks or unticks
+-- every buff of that class, then one switch per buff, icon and name. Built
+-- from BF.MISSING_RAID_BUFFS, so each game lists its own buffs. Each buff is
+-- BOUND (missingRaidBuffs.<key>), so undo and reset work per tick.
+local function EnabledBuffFields()
+    local bf = BF()
+    local all = bf and bf.MISSING_RAID_BUFFS or {}
+    local order, byClass = {}, {}
+    for i = 1, #all do
+        local e = all[i]
+        if not byClass[e.class] then
+            byClass[e.class] = {}
+            order[#order + 1] = e.class
+        end
+        local list = byClass[e.class]
+        list[#list + 1] = e
+    end
+    local GetTex = C_Spell and C_Spell.GetSpellTexture
+    local fields = {}
+    for ci = 1, #order do
+        local cls = order[ci]
+        local buffs = byClass[cls]
+        local label, plain = ClassLabel(cls)
+        -- The class switch ticks or unticks every buff of the class. Switch
+        -- first, label beside it, as every switch in this grid (owner,
+        -- 2026-11-17) -- a plain note here sat higher than the switches.
+        fields[#fields + 1] = {
+            control = "switch", label = label,
+            labelPlacement = "left", labelSide = "after",
+            -- A fixed column, so every row's buffs start at the same x
+            -- (the Spec grid's rule, Pages_AuraContainers.lua). ONE CLASS
+            -- PER ROW: the class starts the line and its buffs follow it.
+            cellWidth = 130, newRow = true,
+            desc = "Check or uncheck every " .. plain .. " buff.",
+            disabled = "combat",
+            -- Checked only when EVERY buff of the class is.
+            get = function()
+                local t = ROOT.missingRaidBuffs
+                if not t then return false end
+                for j = 1, #buffs do
+                    if t[buffs[j].key] ~= true then return false end
+                end
+                return true
+            end,
+            set = function(_, _, v)
+                if InCombatLockdown() then return end
+                local t = ROOT.missingRaidBuffs
+                if not t then return end
+                for j = 1, #buffs do t[buffs[j].key] = v and true or false end
+                MissingRaidBuffTrackers()
+            end,
+        }
+        for j = 1, #buffs do
+            local e = buffs[j]
+            local tex = GetTex and GetTex(e.spell)
+            local icon = tex and ("|T" .. tostring(tex) .. ":16:16:0:0|t ") or ""
+            fields[#fields + 1] = Sw("missingRaidBuffs." .. e.key, icon .. e.name,
+                MissingRaidBuffTrackers,
+                -- Label BESIDE its switch, switch first, on the class's line
+                -- (owner, 2026-11-17): "Priest  [x] <icon> Fortitude  [x] ...".
+                { labelPlacement = "left", labelSide = "after",
+                  desc = "Show an icon when " .. e.name .. " is missing. "
+                      .. "Applies only while you play " .. plain
+                      .. (e.personal and "; shown on your own frame only, "
+                          .. "while in a group." or ".") })
+        end
+    end
+    return fields
+end
+
+local function InstanceTypeFields()
+    local fields = {}
+    for i = 1, #MRB_INSTANCE_TYPES do
+        local it = MRB_INSTANCE_TYPES[i]
+        local opts = { labelSide = "after" }
+        if it.retailOnly then opts.hidden = ForeverHide() end -- [FOREVER] no delves
+        fields[#fields + 1] = Sw("missingRaidBuffInstanceTypes." .. it.key, it.label,
+            MissingRaidBuffTrackers, opts)
+    end
+    -- Only an explicit tick counts, so the condition on with nothing ticked
+    -- shows the icon nowhere. Say so rather than leave it looking broken.
+    fields[#fields + 1] = { control = "note", wide = true,
+        hidden = function()
+            local t = ROOT.missingRaidBuffInstanceTypes
+            if t then
+                for j = 1, #MRB_INSTANCE_TYPES do
+                    local it = MRB_INSTANCE_TYPES[j]
+                    if t[it.key] == true and not (it.retailOnly and ForeverUI()) then -- [FOREVER] delve hidden
+                        return true
+                    end
+                end
+            end
+            return false
+        end,
+        text = "|cffff8080No instance type is checked, so the icons never show.|r" }
+    return fields
 end
 
 function PAGES.missingRaidBuff()
     return {
         { preset = "bare", fields = {
             { control = "note", wide = true,
-              text = "Since Patch 12.1 the Missing Raid Buff icon can only be "
-                  .. "shown |cffffff00out of combat|r." },
+              text = "The Missing Raid Buff icon is only shown out of combat." },
         }},
-        -- The Symbiotic toggle is INSIDE the card but not gated by its
-        -- header: it is a second, independent reason for the indicator to
-        -- appear, exactly as it is in the Ace page, where the size and
-        -- position groups show if EITHER is on.
-        { title = "Missing Raid Buff", preset = "form",
-          toggle = Gate("showMissingRaidBuff", "Show Missing Raid Buff",
+        { title = "Show Missing Raid Buff Icons", preset = "form",
+          toggle = Gate("showMissingRaidBuff", "Show Missing Raid Buff Icons",
                         MissingRaidBuffTrackers),
           fields = {
             Sl("missingRaidBuffSize", "Icon Size", 2, 40, MissingRaidBuffLook,
-               { desc = "Size of the missing raid buff icon, in pixels." }),
-            Sw("missingRaidBuffShowGlow", "Show Glow", MissingRaidBuffLook,
-               { desc = "Show an action-button glow on the missing raid buff icon." }),
+               { desc = "Size of each missing raid buff icon, in pixels." }),
+            Sl("missingRaidBuffSpacing", "Spacing", 0, 20, MissingRaidBuffLook,
+               { desc = "Gap between the icons when more than one buff is "
+                     .. "missing. They grow away from the anchor: rightward "
+                     .. "from a left anchor, leftward from a right anchor, "
+                     .. "centered otherwise." }),
+            Sw("missingRaidBuffDesaturate", "Desaturate Icons", MissingRaidBuffLook,
+               { desc = "Show the missing raid buff icons in grayscale." }),
+            -- Icon Effect, on its own line: the Buffs' Icon Effect row
+            -- (Pages_AuraContainers.lua), same choices.
+            { control = "linebreak" },
+            { control = "dropdown", label = "Icon Effect",
+              bind = "missingRaidBuffIconEffect",
+              desc = "An animated effect drawn on each missing raid buff icon.",
+              options = { { value = "none",  text = "None" },
+                          { value = "glow",  text = "Glow" },
+                          { value = "ants",  text = "Marching Ants" },
+                          { value = "flash", text = "Flash" } },
+              onChange = MissingRaidBuffLook, disabled = "combat" },
+            { control = "segmented", label = "Glow Style",
+              bind = "missingRaidBuffIconEffectGlowStyle",
+              desc = "Steady draws the ring at a constant strength; Pulsing "
+                  .. "fades it in and out.",
+              options = { { value = "steady", text = "Steady" },
+                          { value = "pulse",  text = "Pulsing" } },
+              hidden = function() return ROOT.missingRaidBuffIconEffect ~= "glow" end,
+              onChange = MissingRaidBuffLook, disabled = "combat" },
+            { control = "color", label = "Effect Color", alpha = true,
+              id = "missingRaidBuffIconEffectColor",
+              desc = "Tint of the icon effect. For Flash, the alpha sets the "
+                  .. "pulse's peak strength.",
+              hidden = function()
+                  local fx = ROOT.missingRaidBuffIconEffect
+                  return fx == nil or fx == "none"
+              end,
+              disabled = "combat",
+              get = function()
+                  local c = ROOT.missingRaidBuffIconEffectColor
+                  return { c and c.r or 1, c and c.g or 0, c and c.b or 0, c and c.a or 1 }
+              end,
+              set = function(_, _, v)
+                  if InCombatLockdown() then return end
+                  ROOT.missingRaidBuffIconEffectColor =
+                      { r = v[1], g = v[2], b = v[3], a = v[4] }
+                  MissingRaidBuffLook()
+              end },
+        }},
+        { title = "Position", preset = "form",
+          hidden = function() return not ROOT.showMissingRaidBuff end,
+          fields = {
             -- Three FLAT keys rather than a position table, so the pad is
             -- bound to them by name.
-            { control = "anchor", label = "Position",
+            { control = "anchor", label = "Location",
               binds = { point = "missingRaidBuffAnchor",
                         x     = "missingRaidBuffOffsetX",
                         y     = "missingRaidBuffOffsetY" },
               min = -60, max = 60,
               onChange = MissingRaidBuffLook, disabled = "combat" },
         }},
-        { title = "Symbiotic Relationship", preset = "form", fields = {
-            Sw("showMissingSymbiotic", "Show Missing Symbiotic Relationship (Druid)",
-               MissingRaidBuffTrackers,
-               { wide = true,
-                 desc = "Show an indicator on the player frame when you have the "
-                     .. "Symbiotic Relationship talent but are missing the "
-                     .. "personal buff it grants." }),
+        { title = "Enabled Buffs", preset = "form",
+          hidden = function() return not ROOT.showMissingRaidBuff end,
+          fields = EnabledBuffFields() },
+        -- Off (the default) = shown in every instance type. Gated in its own
+        -- header: the instance types appear only while it is on.
+        { title = "Enable per Instance Type", preset = "form",
+          hidden = function() return not ROOT.showMissingRaidBuff end,
+          toggle = Gate("missingRaidBuffLoadInstance", "Enable per Instance Type",
+                        MissingRaidBuffTrackers),
+          fields = InstanceTypeFields() },
+        { title = "Test Missing Raid Buff", preset = "form",
+          hidden = function() return not ROOT.showMissingRaidBuff end,
+          fields = {
+            IconTestField("testMissingRaidBuff", "Test Missing Raid Buff",
+                          "showMissingRaidBuff"),
+            { control = "note", wide = true,
+              text = "|cffaaaaaaShows every checked buff of your class on the "
+                  .. "preview frames, ignoring the Instance Type condition.|r" },
         }},
     }
 end
@@ -716,10 +964,17 @@ function PAGES.statusIcons()
         tests[i] = TestField(e)
     end
     return {
-        { title = "Status Icons", preset = "form", fields = shown },
-        { title = "Status Icon Position", preset = "form", fields = {
-            Sl("statusIconSize", "Size", 8, 40, LayoutFrames),
-            Pos("statusIconPosition", "Position", LayoutFrames),
+        -- The Role Icons layout: the switches and the size in the first card,
+        -- the position in a card of its own below it.
+        { title = "Status Icons", preset = "form", fields = (function()
+            local f = {}
+            for i = 1, #shown do f[i] = shown[i] end
+            f[#f + 1] = { control = "linebreak" }
+            f[#f + 1] = Sl("statusIconSize", "Icon Size", 8, 40, LayoutFrames)
+            return f
+        end)() },
+        { title = "Position", preset = "form", fields = {
+            Pos("statusIconPosition", "Location", LayoutFrames),
         }},
         { title = "Customize Icons", preset = "form", fields = {
             { control = "segmented", label = "Resurrection Pending Icon",

@@ -399,7 +399,7 @@ function PAGES.absorbs()
                   SetAbsorb("showOvershield", v)
                   ctx.app:RefreshPage()
               end },
-            { control = "dropdown", label = "Overshield Style",
+            { control = "segmented", label = "Overshield Style",
               desc = "How to display absorbs exceeding max health",
               id = "overshieldStyle", default = GSD("overshieldStyle"),
               -- No Ace `sorting`, so the dialog showed the keys
@@ -416,7 +416,7 @@ function PAGES.absorbs()
                   ctx.app:RefreshPage()
               end,
               get = function() local src = Src(); return src and src.overshieldStyle end },
-            { control = "dropdown", label = "Overshield Anchor",
+            { control = "segmented", label = "Overshield Anchor",
               desc = "Position where the overshield anchors on the health bar",
               id = "overshieldAnchor", default = GSD("overshieldAnchor"),
               options = {
@@ -831,7 +831,7 @@ function PAGES.healPrediction()
                   end
                   ctx.app:RefreshPage()
               end },
-            { control = "dropdown", label = "Heal Prediction Anchor",
+            { control = "segmented", label = "Heal Prediction Anchor",
               desc = "Position where heal prediction bar anchors.\n\n"
                   .. "|cffffffffLeft|r: Overlays the health bar from the left "
                   .. "edge, showing predicted health as a fill. Incoming heals "
@@ -849,6 +849,24 @@ function PAGES.healPrediction()
               set = function(_, ctx, v)
                   if InCombatLockdown() then return end
                   SetHealPred("healPredictionAnchor", v)
+                  ctx.app:RefreshPage()
+              end },
+            { control = "segmented", label = "Show Incoming Heals From",
+              desc = "Whose incoming heals the heal prediction bar shows.\n\n"
+                  .. "|cffffffffAll|r: heals from everyone.\n\n"
+                  .. "|cffffffffMe Only|r: only your own heals.\n\n"
+                  .. "|cffffffffOthers Only|r: heals from everyone except you.",
+              id = "healPredictionSource", default = GSD("healPredictionSource"),
+              options = {
+                  { value = "all",    text = "All" },
+                  { value = "me",     text = "Me Only" },
+                  { value = "others", text = "Others Only" },
+              },
+              disabled = CombatOrNot("showHealPrediction"),
+              get = function() local src = Src(); return src and src.healPredictionSource end,
+              set = function(_, ctx, v)
+                  if InCombatLockdown() then return end
+                  SetHealPred("healPredictionSource", v)
                   ctx.app:RefreshPage()
               end },
             { control = "color", label = "Heal Prediction Color", alpha = true,
@@ -1038,7 +1056,7 @@ function PAGES.reducedMax()
                   SetReducedMaxBind("appendReducedMaxText", v)
                   ctx.app:RefreshPage()
               end },
-            { control = "dropdown", label = "Append To",
+            { control = "segmented", label = "Append To",
               desc = "Choose which text element to append the reduced max health "
                   .. "percentage to.",
               id = "appendReducedMaxTarget",
@@ -1114,7 +1132,7 @@ function PAGES.reducedMax()
                   if InCombatLockdown() then return end
                   SetReducedMaxLayout("reducedMaxHealthFontSize", v)
               end },
-            { control = "dropdown", label = "Font Border",
+            { control = "segmented", label = "Font Border",
               id = "reducedMaxHealthFontBorder",
               default = GSD("reducedMaxHealthFontBorder"),
               options = {

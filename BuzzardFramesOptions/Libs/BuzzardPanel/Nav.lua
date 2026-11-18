@@ -3374,3 +3374,12 @@ end
 function ns.nav.RefreshChrome(app)
     return ns.nav.Refresh(app, true)
 end
+
+-- ── Test hooks ─────────────────────────────────────────────────
+--
+-- Tests/BuzzardPanel/test_nav_railkids.py holds the renderer and
+-- VisibleTreeRows to ONE answer about which children the rail draws, so it
+-- needs both halves directly. Read-only references to the two locals; no
+-- caller in the panel uses them.
+ns.nav.RenderTreeForTest      = RenderTree
+ns.nav.VisibleTreeRowsForTest = VisibleTreeRows

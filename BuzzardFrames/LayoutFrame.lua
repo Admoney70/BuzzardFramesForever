@@ -3,6 +3,7 @@
 -- ============================================================
 --
 local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
+local IS_FOREVER = BF.isForever -- [FOREVER]
 --
 -- Shared helpers, caches, and RefreshAll* entry points used by
 -- indicators, options panels, and event handlers.
@@ -159,6 +160,7 @@ function BF:ShouldShowPowerBar(unit, frame)
 
     -- Filtered mode — unit must match one of the enabled filters
     if unit == "player" and not IsInGroup() then
+        if IS_FOREVER then return false end -- [FOREVER] no spec role on Forever: the "no spec" result
         local spec = GetSpecialization()
         if not spec then return false end
         if hp.showPowerBarHealers and GetSpecializationRole(spec) == "HEALER" then return true end
@@ -301,6 +303,10 @@ function BF:RefreshHealthBarLayout()
     -- so a new texture leaves them holding the old one until they are
     -- re-stamped -- see BF:RestampFrameFx (Indicators/BuffsAndContainers.lua).
     if self.RestampFrameFx then self:RestampFrameFx() end
+    -- Same dependency for the Duration Bar slots (sbb<ci>) set to "Use Health
+    -- Bar Texture": restyled here, sig-guarded -- see BF:RestyleSingleBuffBars
+    -- (Indicators/BuffsAndContainers.lua).
+    if self.RestyleSingleBuffBars then self:RestyleSingleBuffBars() end
 end
 
 function BF:RefreshPowerBarLayout()

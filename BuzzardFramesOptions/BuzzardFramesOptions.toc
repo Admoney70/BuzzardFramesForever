@@ -1,4 +1,5 @@
-## Interface: 120100
+## Interface: 120105, 16001
+## AllowLoadGameType: standard, camelot
 ## Title: |cff11ace9Buzzard Frames|r Options
 ## Notes: The new options panel for Buzzard Frames. Loads on demand, the first time options are opened.
 ## Author: Serina
@@ -36,6 +37,16 @@ Libs\BuzzardPanel\BuzzardPanel.xml
 # load-bearing between them: each one only adds a method to the table
 # Panel.lua published, and nothing is called until the panel is opened.
 Panel.lua
+
+# WoW Forever only: each file exits on its first line on Retail. After
+# Panel.lua (they register on the table it publishes) and BEFORE the page
+# files, whose one-line [FOREVER] wrap hooks look for them while loading.
+Forever\Forever_Pages.lua
+Forever\Forever_Pages_ClassOverrides.lua
+Forever\Forever_Pages_ClassCondition.lua
+
+# TEMPORARY: blank-header diagnostic (/bfpanediag). Remove once fixed.
+Debug_PaneDiag.lua
 Pages_Testing.lua
 
 # The border style control, shared by every page that draws one: the six

@@ -34,6 +34,7 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The section as it reads right now: the merged view for the modifying
 -- Layout, which degrades to the global wherever no subtab is per-Layout.
@@ -72,7 +73,7 @@ local FONT_KEYS = {
 -- vehicleNamePosition) need one more level -- an anchor pad binds
 -- `namePosition.point` -- so a key whose value is a table answers with a
 -- wrapper of its own, reading from the view and writing through
--- SectionKeyTable, which materialises the per-flat copy on demand exactly
+-- SectionKeyTable, which materializes the per-flat copy on demand exactly
 -- as the Ace setters do.
 local subCache = {}
 
@@ -724,7 +725,7 @@ end
 -- than replacing it (deadColor, offlineColor, groupLabelColor). The Ace
 -- side mutates the table the MERGED VIEW answers with, which the section
 -- contract forbids writing; migrated to SectionKeyTable -- the router that
--- answers with the table to mutate, never the view, and materialises the
+-- answers with the table to mutate, never the view, and materializes the
 -- per-flat copy on demand. Same observable result today, routed correctly.
 local function ColorInPlace(key, label, fallback, effect, opts)
     local f = Color(key, label, false, fallback, effect, opts)
@@ -814,19 +815,26 @@ function PAGES.names()
                       .. "Names when enabled.",
                   hidden = function() return TPv("classColorNames") end }),
         }},
-        -- capitalizeNamesGroup.
-        { title = "Capitalize Names", preset = "form", fields = {
-            Sw("capitalizeNames", "Capitalize Names", NamesRefresh,
-               { desc = "Convert unit names to uppercase." }),
-        }},
-        -- abbreviateNamesGroup: maxNameChars hidden unless abbreviateNames
-        -- -- the gate collapse. The gate's tooltip carries the Ace toggle's
-        -- own name.
-        { title = "Abbreviate Names", preset = "form",
-          toggle = Gate("abbreviateNames", "Abbreviate Long Names", NamesRefresh),
-          fields = {
-            Sl("maxNameChars", "Max Name Length", 3, 20, NamesRefresh),
-        }},
+        -- Modify Names (2026-11-17, owner): the former Capitalize Names
+        -- card, with the former Abbreviate Names card's two options moved
+        -- in. Abbreviate is a field here, not the card's toggle, because the
+        -- card also holds Capitalize; Max Name Length is hidden unless it is
+        -- on, as the old card's gate did.
+        -- Built step by step, not as a literal: a Forever-only entry in the
+        -- MIDDLE of a literal would be a nil hole on Retail, and the panel
+        -- stops reading fields at the first hole.
+        { title = "Modify Names", preset = "form", fields = (function()
+            local f = {
+                Sw("capitalizeNames", "Capitalize Names", NamesRefresh,
+                   { desc = "Convert unit names to uppercase." }),
+            }
+            if ForeverUI() then f[#f + 1] = Sw("showLastName", "Show Last Name", NamesRefresh, { desc = ForeverUI().SHOW_LAST_NAME_DESC }) end -- [FOREVER] before Abbreviate, same row, Forever only
+            f[#f + 1] = Sw("abbreviateNames", "Abbreviate Names", NamesRefresh,
+               { desc = "Shorten names longer than Max Name Length." })
+            f[#f + 1] = Sl("maxNameChars", "Max Name Length", 3, 20, NamesRefresh,
+               { hidden = function() return not TPv("abbreviateNames") end })
+            return f
+        end)() },
         -- cyrillicHeader and the two loose toggles under it become a card.
         { title = "Cyrillic Names", preset = "form", fields = {
             Sw("transliterateCyrillicNames", "Transliterate Cyrillic Names",

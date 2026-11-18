@@ -1,6 +1,6 @@
 -- ============================================================
 -- BuzzardFrames: Range.lua
--- Range detection modelled directly on Grid2's StatusRange.lua.
+-- Range detection modeled directly on Grid2's StatusRange.lua.
 -- ============================================================
 
 local BF = _G["BuzzardFrames"]
@@ -92,7 +92,7 @@ do
         getFriendly = function() return 2061  end  -- Flash Heal
     elseif playerClass == "SHAMAN" then
         getHostile  = function() return 188196 end -- Lightning Bolt
-        getFriendly = function() return 8004  end  -- Healing Surge
+        getFriendly = function() return 77472 end  -- Healing Wave (Healing Surge 8004 no longer in the Retail spellbook; owner, 2026-11-06)
     elseif playerClass == "PALADIN" then
         getHostile  = function() return 62124 end  -- Hand of Reckoning
         getFriendly = function() return 19750 end  -- Flash of Light
@@ -124,6 +124,7 @@ do
         getHostile  = function() return IVS(116) or IVS(30451) or IVS(133) end -- Frostbolt/Arcane Blast/Fireball
         getFriendly = function() return 1459  end  -- Arcane Intellect
     end
+    if BF.isForever then getHostile, getFriendly = BF.Forever.RangeSpellGetters(playerClass) end -- [FOREVER]
 
     function BF:UpdatePlayerRangeSpells()
         local hid = getHostile and getHostile()
@@ -192,6 +193,7 @@ local petSpellID = ({
     WARLOCK     = 5697,  -- Unending Breath (Health Funnel 755 removed in 12.0)
     DEATHKNIGHT = 47541, -- Death Coil
 })[playerClass]
+if BF.isForever then petSpellID = BF.Forever.RANGE_PET_SPELL[playerClass] end -- [FOREVER]
 local petSpell = petSpellID and C_Spell.GetSpellName(petSpellID)
 
 -- Grid2 verbatim: petCheckUnit (StatusRange.lua:94). 'pet' while solo, nil

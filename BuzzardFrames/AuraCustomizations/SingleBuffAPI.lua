@@ -11,6 +11,7 @@
 -- container CRUD CreateSingleBuffContainer calls at runtime).
 -- ============================================================
 local BF = _G["BuzzardFrames"]
+local IS_FOREVER = BF.isForever -- [FOREVER]
 -- The addon private table, for the curated buff list (ns.SpellData, built by
 -- SpellSearch\SpellData_Buffs.lua). Read lazily at call time.
 local _addonName, ns = ...
@@ -305,6 +306,15 @@ function BF:CreateSingleBuffContainer(text, onlyMine, blacklist)
     if InCombatLockdown() then return nil, "Not available in combat." end
     local sid, resolved = resolveSpellInput(text)
     if not sid then return nil, resolved end
+    -- [FOREVER] begin
+    -- Owner ruling 2026-11-06: on WoW Forever the entry's primary ID (key,
+    -- icon, name) is the LOWEST RANK of the typed spell's rank set; every rank
+    -- goes in c.foreverSpellIDs (filled after creation, below).
+    local foreverRanks
+    if IS_FOREVER and BF.Forever.ResolveAddedSpell then
+        sid, foreverRanks = BF.Forever.ResolveAddedSpell(sid)
+    end
+    -- [FOREVER] end
     if onlyMine == nil then onlyMine = defaultOwnOnlyFor(sid) end
     -- v62: the "specialization is not known yet" bail is gone with the
     -- spellAssign write it existed to protect. A single buff has no per-spec
@@ -369,6 +379,13 @@ function BF:CreateSingleBuffContainer(text, onlyMine, blacklist)
         -- reads a stored `false` as "not hidden" just as it reads absent.
         singleBuffHidden          = blacklist or nil,
     })
+    -- [FOREVER] begin
+    -- Phase J: on WoW Forever the entry holds every same-name rank ID
+    -- (c.foreverSpellIDs), Grid2's add-by-ID behavior.
+    if IS_FOREVER and newIndex and BF.Forever.OnSingleBuffCreated then
+        BF.Forever.OnSingleBuffCreated(BF:GetCustomBuffContainers()[newIndex], sid, foreverRanks)
+    end
+    -- [FOREVER] end
     -- v62: the specSpellCustomized raise that used to live here is GONE.
     --
     -- It existed for exactly one reason: a curated spell of the current spec
@@ -508,6 +525,7 @@ BF.SINGLE_BUFF_SUBTAB_SENTINEL = -1
 --   * A Spec condition with a table decides by that table (absent key = on).
 --   * Otherwise curated-list membership: the spec's list holds the spell.
 function BF:SingleBuffMatchesSpecFilter(c, f)
+    if IS_FOREVER then return BF.Forever.SingleBuffMatchesClassFilter(c, f) end -- [FOREVER] Filter by Class (f = token)
     if type(c) ~= "table" then return false end
     f = tonumber(f) or 0
     if f == 0 then return true end

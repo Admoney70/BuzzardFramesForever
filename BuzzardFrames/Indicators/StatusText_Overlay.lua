@@ -129,6 +129,7 @@ end
 local function GetUnitBaseName(unit, p)
 	local nameUnit = BF.owner_of_unit and BF.owner_of_unit[unit] or unit
 	local baseName = UnitName(nameUnit) or "?"
+	if BF.isForever and p and p.showLastName then baseName = BF.Forever.UnitNameWithSurname(nameUnit) or "?" end -- [FOREVER] Show Last Name
 	-- Secret guard: find/#/sub on a secret string throws. Non-player names
 	-- can be secret in 12.0, and append mode routes every dead/offline/AFK
 	-- unit's name through here. Return the secret untouched.
@@ -237,27 +238,232 @@ function StatusOverlay:Create(parent)
 end
 
 -- ============================================================
--- Resolved config block  (Grid2 parity: Text_UpdateDB / Text_Layout)
+-- Status text config: ONE block per SCOPE, never per frame  (2026-11-17)
 -- ============================================================
--- The reference design resolves an indicator's config ONCE, when the DB is
--- known-loaded, into a block the indicator holds, and Layout then writes that
--- block to the widget with no decisions left in it:
+-- Owner rule (2026-11-17): status text font and position are dictated by the
+-- scope's Layout and are IDENTICAL on every frame of that scope. The scopes:
 --
---   Grid2 modules/IndicatorText.lua:251  Text_UpdateDB
---     self.textfont = Grid2:MediaFetch("font", dbx.font or theme.font)
---                     or STANDARD_TEXT_FONT
---   Grid2 modules/IndicatorText.lua:106  Text_Layout
---     Text:SetFont(self.textfont, self.textsize, self.fontFlags)
+--   _MAIN_SCOPE    every regular party/raid frame (and pet frames / twins,
+--                  which resolve through the same active Layout). Its config
+--                  is the ACTIVE Layout's text section.
+--   grp (table)    one Custom Frame Group. Its config is that group's text
+--                  section: its own Status Text override when on, else the
+--                  active Layout's values (GetCFGSectionProfile decides).
 --
--- Three properties, and the point is that they work together: the fallback
--- chain is baked in at RESOLVE time, so the block handed to Layout is always
--- complete, which is exactly why Layout needs no `if not tp then return end`.
--- This indicator previously had that early return, and it is what made the
--- Create-time default (dark red GameFontNormalSmall at the container center)
--- survive on screen whenever Layout ran on a pass where the section profile
--- was not yet resolvable. See BuzzardFrames_IndicatorUpdateDB_Plan.md §2 and
--- §5.
+-- Field report that prompted this: one party member's status text showed at
+-- a different size from the rest. The previous design resolved config PER
+-- FRAME at the moment that frame's Layout ran, against live state, and
+-- relied on every config path remembering to re-Layout every frame. Each
+-- path swept a different set of frames, so one frame could hold a value its
+-- siblings did not. The structure below removes the per-frame decision:
 --
+--   1. A scope's block is (re)resolved ONLY by RunScopePass, and that same
+--      pass re-applies the block to EVERY registered frame of the scope
+--      (spares included) whose applied stamp does not match. A block value
+--      can therefore never change without all of its frames changing with it.
+--   2. Frames never resolve config. Layout looks up the frame's scope (by its
+--      header) and writes that scope's block -- the same table every sibling
+--      wrote.
+--   3. Scopes are laid out separately: a pass re-applies only frames whose
+--      scope block actually changed, so a Custom Frame Group edit touches
+--      that group's frames alone, and an active-Layout change touches the
+--      regular frames plus any group following the active Layout.
+--
+-- Grid2 reference: Text_UpdateDB resolves the indicator config once and
+-- Grid2Frame:LayoutFrames (GridFrame.lua:403) re-Layouts every frame of every
+-- header on a theme/profile change. RunScopePass is that sweep, run per scope
+-- and change-guarded so it is no more expensive than Grid2's (one compare per
+-- frame; SetFont/SetPoint only on frames whose scope moved).
+--
+-- TRIGGERS. The pass is marked dirty and scheduled for the next frame by
+-- BF:ScheduleStatusTextPass, which is called from:
+--   * both BF._sectionCfgGen bump sites (InvalidateRaidProfileCache and
+--     _InvalidateSectionViews, Core_ProfileAPI.lua) -- every config edit and
+--     every context / flat change goes through one of them;
+--   * header scope changes that do NOT bump the generation: a Custom Frame
+--     Group header being assigned its group (AddCustomFrameHeaders) or reset
+--     for reuse (BFHeaderClass.prototype:Reset), BFLayout.lua.
+-- Layout ALSO runs the pass synchronously first whenever it is dirty or the
+-- generation moved, so a Layout can never write a block that is about to be
+-- replaced for its siblings.
+--
+-- Options PREVIEW frames are not live frames and are not registered; they
+-- keep the per-frame resolver below (ResolvePreviewBlock) so a preview shows
+-- the Layout / group being edited, which need not be the active one.
+
+-- Fill `block` from a text section profile. Returns true if any value moved.
+-- The default chain is spelled out literally (not read off a FontString) so
+-- the block never depends on per-frame state. It equals what Create stamps:
+-- BF.font or GameFontNormalSmall's font or FRIZQT, its size or 10, its flags
+-- or "". adjustStatusFont ON takes the configured face, the configured size
+-- falling back to the default size, the configured border falling back to
+-- none; OFF takes the default triple whole. BF:ResolveFontPath always
+-- returns a path, so fontPath is never nil.
+local function FillBlock(block, tp)
+	local baseFont, baseSize, baseFlags
+	if GameFontNormalSmall then
+		baseFont, baseSize, baseFlags = GameFontNormalSmall:GetFont()
+	end
+	baseFont  = BF.font or baseFont or "Fonts\\FRIZQT__.TTF"
+	baseSize  = baseSize  or 10
+	baseFlags = baseFlags or ""
+
+	local fontPath, fontSize, fontFlags
+	if tp and tp.adjustStatusFont then
+		fontPath  = BF:ResolveFontPath(tp.statusFont)
+		fontSize  = tp.statusFontSize or baseSize
+		fontFlags = tp.statusFontBorder or ""
+	else
+		fontPath  = baseFont
+		fontSize  = baseSize
+		fontFlags = baseFlags
+	end
+	local point = (tp and tp.statusTextPosition) or "CENTER"
+	local x     = (tp and tp.statusTextX) or 0
+	local y     = (tp and tp.statusTextY) or 0
+
+	if block.fontPath == fontPath and block.fontSize == fontSize
+	   and block.fontFlags == fontFlags and block.point == point
+	   and block.x == x and block.y == y then
+		return false
+	end
+	block.fontPath  = fontPath
+	block.fontSize  = fontSize
+	block.fontFlags = fontFlags
+	block.point     = point
+	block.x         = x
+	block.y         = y
+	return true
+end
+
+-- Write a block to one frame's label, unconditionally (Grid2 Text_Layout),
+-- and stamp which block / version the label now holds.
+local function ApplyBlock(parent, block)
+	local fs = parent.statusText
+	fs:SetFont(block.fontPath, block.fontSize, block.fontFlags)
+	-- Never re-set this font from fs:GetFont(): GetFont() does not round-trip
+	-- exactly on the scaled headers, and a GetFont -> SetFont cycle per tick
+	-- once shrank "Offline"/"Dead" below the configured size (user report).
+	-- _cfgFont* is read only by /bf statusdiag.
+	fs._cfgFontPath  = block.fontPath
+	fs._cfgFontSize  = block.fontSize
+	fs._cfgFontFlags = block.fontFlags
+	fs._bf_stBlock   = block
+	fs._bf_stVer     = block.ver
+
+	fs:ClearAllPoints()
+	local anchor = parent.container or parent.healthBar or parent
+	fs:SetPoint(block.point, anchor, block.point, block.x, block.y)
+
+	-- Grid2 Text_Layout: Text:Show(); Frame:Show(). Both stay shown; whether
+	-- the label is visible is the container's alpha alone (SetStatusTextShown).
+	fs:Show()
+	if parent.statusTextFrame then parent.statusTextFrame:Show() end
+end
+
+-- ── Scopes ───────────────────────────────────────────────────
+-- Key for the regular frames. A table so it can never collide with a group.
+local _MAIN_SCOPE = {}
+-- scope key -> block. Weak keys: a Custom Frame Group table that is gone
+-- (profile switch, group deleted) takes its block with it.
+local _scopeBlocks = setmetatable({}, { __mode = "k" })
+-- Scopes already resolved during the current pass (reused, wiped per pass).
+local _passSeen = {}
+local _passGen     = nil   -- BF._sectionCfgGen the last pass ran at
+local _scopesDirty = true  -- set by ScheduleStatusTextPass, cleared by a pass
+
+-- The frame's scope, by its HEADER (read live, never cached on the frame:
+-- a Custom Frame Group header can be reset and reassigned to another group).
+local function ScopeOf(frame)
+	local header = frame:GetParent()
+	if header and header._cfgFlat and header._cfgGroup then
+		return header._cfgGroup, header
+	end
+	return _MAIN_SCOPE, header
+end
+
+-- The text section profile for a scope. _MAIN_SCOPE is exactly what
+-- GetSectionProfileForFrame returns for a regular frame; a group is exactly
+-- what it returns for that group's frames.
+local function ScopeProfile(key, header)
+	if key == _MAIN_SCOPE then
+		local activeFlat = BF:ResolveActiveIsRaid() and BF:GetRaidProfile()
+		                   or BF:GetActivePartyProfile()
+		return BF:GetSectionProfile("text", activeFlat)
+	end
+	return BF:GetCFGSectionProfile("text", header._cfgGroup, header._cfgFlat)
+end
+
+-- Resolve a scope's block. Creates it on first sight. Bumps block.ver when a
+-- value moved so every frame stamped with the old version is re-applied.
+local function ResolveScope(key, header)
+	local block = _scopeBlocks[key]
+	if block == nil then
+		block = { ver = 0 }
+		_scopeBlocks[key] = block
+	end
+	if FillBlock(block, ScopeProfile(key, header)) then
+		block.ver = block.ver + 1
+	end
+	block.gen = BF._sectionCfgGen or 0
+	return block
+end
+
+-- THE pass. Resolves each scope present among the registered frames once,
+-- then re-applies the scope's block to every frame of it that does not hold
+-- the current version. Frames whose scope did not change are not touched.
+local function RunScopePass()
+	_scopesDirty = false
+	_passGen = BF._sectionCfgGen or 0
+	local frames = BF.registeredFrames
+	if not frames then return end
+	for _, frame in next, frames do
+		local fs = frame.statusText
+		if fs and not frame._isPreviewFrame then
+			local key, header = ScopeOf(frame)
+			local block
+			if _passSeen[key] then
+				block = _scopeBlocks[key]
+			else
+				_passSeen[key] = true
+				block = ResolveScope(key, header)
+			end
+			if fs._bf_stBlock ~= block or fs._bf_stVer ~= block.ver then
+				ApplyBlock(frame, block)
+			end
+		end
+	end
+	wipe(_passSeen)
+end
+
+-- Coalesced next-frame pass. Cheap to call repeatedly: one timer per frame.
+local _passQueued = false
+local function QueuedPass()
+	_passQueued = false
+	if _scopesDirty or _passGen ~= (BF._sectionCfgGen or 0) then
+		RunScopePass()
+	end
+end
+function BF:ScheduleStatusTextPass()
+	_scopesDirty = true
+	if not _passQueued then
+		_passQueued = true
+		C_Timer.After(0, QueuedPass)
+	end
+end
+
+-- ============================================================
+-- Preview frames only: per-frame resolver
+-- ============================================================
+-- Preview frames show the Layout / group being EDITED (frame._flatID /
+-- _cfgFlat), which need not be the active one, so they cannot share a live
+-- scope block. Cached per section table + generation as before. The section
+-- table is a weak key: merged views are re-minted on invalidation.
+--
+-- SECTION-TABLE CACHE KEYS (referenced by the other indicators' _cfgBlocks
+-- caches, which use the scheme below for ALL their frames; status text uses it
+-- for preview frames only). Kept verbatim from before the 2026-11-17 scope
+-- rewrite.
 -- SCOPE KEY = THE SECTION TABLE ITSELF. BF's config is per scope, not global:
 -- the active flat, each Custom Frame Group (header._cfgFlat / _cfgGroup) and
 -- each preview frame (frame._flatID) resolve to DIFFERENT section tables out
@@ -279,166 +485,55 @@ end
 -- AceDB table the options UI mutates IN PLACE (BFStatus.lua:999-1001), whose
 -- identity never changes on an edit. Keying on the table alone would never
 -- notice those edits at all; that is what the generation key is for.
-local _blockCacheMeta = { __mode = "k" }
-
--- Scope key for "no section profile resolvable for this frame". A table, so it
--- can never collide with a real section table.
+local _previewBlocks = setmetatable({}, { __mode = "k" })
 local _NO_SECTION = {}
+
+local function ResolvePreviewBlock(parent)
+	local tp  = BF:GetSectionProfileForFrame("text", parent)
+	local key = tp or _NO_SECTION
+	local gen = BF._sectionCfgGen or 0
+	local block = _previewBlocks[key]
+	if block and block.gen == gen then return block end
+	if block == nil then
+		block = { ver = 0 }
+		_previewBlocks[key] = block
+	end
+	if FillBlock(block, tp) then block.ver = block.ver + 1 end
+	block.gen = gen
+	return block
+end
 
 -- ============================================================
 -- UpdateSettings  (Grid2 parity: UpdateDB)
 -- ============================================================
--- Implements the hook declared at BFIndicator.lua:62 and dispatched by
--- BF:RefreshIndicatorSettings (BFIndicator.lua:332) on every profile/context
--- switch. Drops the resolved blocks so the next Layout re-resolves.
---
--- This is the PUSH half only. It is an optimization, not the correctness
--- guarantee: the generation key in ResolveStatusTextBlock below is what makes
--- staleness impossible on the paths that reach indicator:Layout without ever
--- reaching RefreshIndicatorSettings (plan §6.1(b)). Wiping here just means the
--- common path resolves once per scope per generation instead of discovering
--- the bump on first use.
+-- Dispatched by BF:RefreshIndicatorSettings on every profile/context switch.
 function StatusOverlay:UpdateSettings()
-	self._cfgBlocks = nil
+	wipe(_previewBlocks)
+	BF:ScheduleStatusTextPass()
 end
 
--- Resolve (or reuse) this frame's block. Declared ABOVE StatusOverlay:Layout
--- on purpose: a Lua local is only in scope after its declaration, so a
--- resolver placed below its caller would compile to a nil global lookup and
--- throw only on the path that reaches it. This tree has been bitten by that
--- twice; Tests/check_locals.py exists for it.
-local function ResolveStatusTextBlock(parent)
-	-- Route by frame so Custom Frame Groups and preview frames reflect their
-	-- own per-layout font/position edits. See BF:GetSectionProfileForFrame.
-	local tp  = BF:GetSectionProfileForFrame("text", parent)
-	local key = tp or _NO_SECTION
-
-	-- GENERATION KEY. BF._sectionCfgGen is bumped by InvalidateRaidProfileCache
-	-- (Core_ProfileAPI.lua:639) and _InvalidateSectionViews (:992), which every config-changing
-	-- path is REQUIRED to pass through. That is an invariant to KEEP, not an
-	-- observation that holds by itself: on 2026-09-23 four writers were found
-	-- that reached neither bump site -- the Global Styles text, icons and
-	-- borders fan-outs (BuzzardFramesOptions/Pages_GlobalStylesShared.lua) and
-	-- the Cast Bars page (Pages_CastBar.lua) -- and each was given the
-	-- invalidation it was missing. All four assign into the EXISTING section
-	-- table, so the scope key does not move either and the block below froze
-	-- with no error of any kind. A new config writer that reaches neither does
-	-- exactly the same thing. This is the existing in-tree pattern,
-	-- not a new one: HealthText stamps parent._bf_htCfgGen
-	-- (Indicators/HealthText.lua:129) and re-resolves when
-	-- `parent._bf_htCfgGen ~= (BF._sectionCfgGen or 0)` (:417). Re-resolving on a
-	-- moved generation is what lets Layout write unconditionally without
-	-- depending on anyone having remembered to call UpdateSettings first.
-	local gen = BF._sectionCfgGen or 0
-
-	local blocks = StatusOverlay._cfgBlocks
-	if blocks == nil then
-		blocks = setmetatable({}, _blockCacheMeta)
-		StatusOverlay._cfgBlocks = blocks
+-- The block Layout writes for this frame right now. Used by /bf statusdiag.
+local function BlockForFrame(parent)
+	if parent._isPreviewFrame then return ResolvePreviewBlock(parent) end
+	if _scopesDirty or _passGen ~= (BF._sectionCfgGen or 0) then
+		RunScopePass()
 	end
-
-	local block = blocks[key]
-	if block and block.gen == gen then return block end
-	if block == nil then
-		block = {}
-		blocks[key] = block
-	end
-	block.gen = gen
-
-	-- DEFAULT CHAIN, spelled out literally rather than read off the FontString.
-	-- The block is shared by every frame in this scope, so it must not depend on
-	-- per-FontString state: fs.SF_defaultFont / SF_defaultSize / SF_defaultFlags
-	-- are exactly what the old Layout read, and that read is what made this
-	-- resolution per-frame. It is safe to drop because StatusOverlay:Create
-	-- (above) stamps those three fields on EVERY statusText it builds, from this
-	-- same chain -- BF.font or GameFontNormalSmall's font or FRIZQT, its size or
-	-- 10, its flags or "" -- so the literal chain and the stamped triple are the
-	-- same values. BF.font is a file-scope constant (Core.lua:87), never
-	-- reassigned, so reading it here rather than at Create time cannot diverge.
-	--
-	-- One dead branch went with it: the old Layout's `SF_defaultFlags or
-	-- "OUTLINE"` could never fire, because Create always stamps that field and
-	-- stamps "" at worst -- and "" is truthy in Lua. Not a behavior change.
-	local baseFont, baseSize, baseFlags
-	if GameFontNormalSmall then
-		baseFont, baseSize, baseFlags = GameFontNormalSmall:GetFont()
-	end
-	baseFont  = BF.font or baseFont or "Fonts\\FRIZQT__.TTF"
-	baseSize  = baseSize  or 10
-	baseFlags = baseFlags or ""
-
-	-- FONT SOURCE OF TRUTH. This is the only place the status font is resolved
-	-- from config. adjustStatusFont semantics are unchanged: ON takes the
-	-- configured face, the configured size falling back to the default size, and
-	-- the configured border falling back to none; OFF takes the default triple
-	-- whole. BF:ResolveFontPath (PixelPerfect.lua:656) always returns a path, so
-	-- block.fontPath is never nil.
-	if tp and tp.adjustStatusFont then
-		block.fontPath  = BF:ResolveFontPath(tp.statusFont)
-		block.fontSize  = tp.statusFontSize or baseSize
-		block.fontFlags = tp.statusFontBorder or ""
-	else
-		block.fontPath  = baseFont
-		block.fontSize  = baseSize
-		block.fontFlags = baseFlags
-	end
-
-	-- Position. Same defaults the old Layout carried: CENTER, and 0/0 offsets.
-	-- The point doubles as its own relative point, as before.
-	block.point = (tp and tp.statusTextPosition) or "CENTER"
-	block.x     = (tp and tp.statusTextX) or 0
-	block.y     = (tp and tp.statusTextY) or 0
-
-	return block
+	local key, header = ScopeOf(parent)
+	-- A scope with no block yet: no REGISTERED frame is in it (the pass just
+	-- covered all of them), so this is the first frame of a new header,
+	-- laid out by BuzzardFrame_Init before RegisterFrame lists it.
+	-- Resolving it here cannot leave a sibling on a different value.
+	return _scopeBlocks[key] or ResolveScope(key, header)
 end
-
--- Read-only hook for /bf statusdiag (Core_ChatCommands.lua): lets the
--- diagnostic ask what Layout WOULD write right now, through the same resolver,
--- without duplicating its default chain. Nothing in the render path calls it.
-StatusOverlay.ResolveBlock = ResolveStatusTextBlock
+StatusOverlay.ResolveBlock = BlockForFrame
 
 -- ============================================================
 -- Layout
 -- ============================================================
 function StatusOverlay:Layout(parent)
-	local fs = parent.statusText
-	-- Widget-existence guard, NOT a config guard. If :Create never ran for this
-	-- frame there is no FontString to write to and nothing this function could
-	-- usefully do. The config guard that used to sit beside it
-	-- (`if not tp then return end`) is gone: see ResolveStatusTextBlock above --
-	-- the block is complete even when no section profile resolves, so there is
-	-- no longer anything for Layout to decide.
-	if not fs then return end
-
-	local block = ResolveStatusTextBlock(parent)
-
-	-- UNCONDITIONAL WRITE (Grid2 Text_Layout). Every field below is written on
-	-- every call; this function is structurally incapable of leaving the widget
-	-- holding its Create-time defaults.
-	fs:SetFont(block.fontPath, block.fontSize, block.fontFlags)
-
-	-- The resolved triple is ALSO stamped on the FontString (_cfgFont*). Since
-	-- 2026-10-01 nothing in the render path reads it: Layout is the ONLY writer
-	-- of the status font (Grid2 Text_Layout), and the Dead / RangeAlpha
-	-- re-SetFont calls that used to read these fields are gone. The one reader
-	-- left is /bf statusdiag (Core_ChatCommands.lua), which compares them with
-	-- what the label is actually using.
-	--
-	-- Never re-set this font from fs:GetFont(): GetFont() does not round-trip
-	-- exactly on the scaled headers, and a GetFont -> SetFont cycle per tick
-	-- once shrank "Offline"/"Dead" below the configured size (user report).
-	fs._cfgFontPath  = block.fontPath
-	fs._cfgFontSize  = block.fontSize
-	fs._cfgFontFlags = block.fontFlags
-
-	fs:ClearAllPoints()
-	local anchor = parent.container or parent.healthBar or parent
-	fs:SetPoint(block.point, anchor, block.point, block.x, block.y)
-
-	-- Grid2 Text_Layout: Text:Show(); Frame:Show(). Both stay shown; whether
-	-- the label is visible is the container's alpha alone (SetStatusTextShown).
-	fs:Show()
-	if parent.statusTextFrame then parent.statusTextFrame:Show() end
+	-- Widget-existence guard, NOT a config guard: no FontString, nothing to do.
+	if not parent.statusText then return end
+	ApplyBlock(parent, BlockForFrame(parent))
 end
 
 -- ============================================================

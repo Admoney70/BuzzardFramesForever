@@ -233,6 +233,17 @@ local SPELLS = {
     },
 }
 
+-- [FOREVER] begin
+-- WoW Forever: the search list is Forever's own class table
+-- (Forever/Forever_SpellData_Buffs.lua, loaded just before this file).
+do
+    local bf = _G["BuzzardFrames"]
+    if bf and bf.isForever and bf.Forever and bf.Forever.BUFF_SPELLS then
+        SPELLS = bf.Forever.BUFF_SPELLS
+    end
+end
+-- [FOREVER] end
+
 local CLASS_ORDER = {
     "", "DEATHKNIGHT", "DEMONHUNTER", "DRUID", "EVOKER", "HUNTER", "MAGE",
     "MONK", "PALADIN", "PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",

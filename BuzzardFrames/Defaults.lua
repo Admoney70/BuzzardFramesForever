@@ -33,6 +33,7 @@ local BF = LibStub("AceAddon-3.0"):NewAddon(addonName,
     "AceConsole-3.0"
 )
 _G["BuzzardFrames"] = BF
+local _cli = select(4, GetBuildInfo()); BF.isForever = _cli >= 16000 and _cli < 20000 -- [FOREVER]
 
 -- No-op stubs for the §L5 load/switch harness. LoadTiming.lua (the very
 -- next file in the .toc) replaces every one of them with the real
@@ -547,6 +548,11 @@ BF.defaults = {
         testSummonPending    = false,
         testResurrectPending = false,
         testVehicleIcon      = false,
+        testRaidTargetIcon   = false,
+        testLeaderIcon       = false,
+        testAssistantIcon    = false,
+        testPingIndicator    = false,
+        testMissingRaidBuff  = false,
         testHealPrediction   = false,
         testHealAbsorb       = false,
         testAbsorb           = false,

@@ -162,8 +162,11 @@ function BigDefIcons:Create(parent)
             -- group an aura is a single candidate and is assigned once, so an
             -- aura flagged BOTH categories takes one slot. That is also what the
             -- old `!BIG_DEFENSIVE` on `ext` was for -- it existed solely to keep
-            -- the two groups disjoint (cross-group overlap is deduped but the
-            -- WINNER is engine-unspecified), and it is unnecessary here.
+            -- the two groups disjoint (groups in one container do NOT dedup:
+            -- each includes a matching aura independently -- 12.1.0 / 12.1.5
+            -- UpdateAuraInGroups, PTR-confirmed per the ContainerFactory.lua
+            -- slot-visual note -- so an aura flagged both would have rendered
+            -- twice), and it is unnecessary here.
             --
             -- Ordering now comes from AuraContainerSortMethod.BigDefensive
             -- above, rather than from big-defensives being registered first.
@@ -261,6 +264,9 @@ end
 -- v67: 12.0.7 branch removed (addon is 12.1-only).
 function BigDefIcons:Layout(parent)
     if not parent._isPreviewFrame then
+        -- Duration Bar Stage 5: re-derive the frame's static push on first use
+        -- this pass (BF.SingleBuffBarPushFor, BuffsAndContainers.lua).
+        if BF.InvalidateSingleBuffBarPush then BF.InvalidateSingleBuffBarPush(parent) end
         if not (parent._bf_auraContainers and parent._bf_auraContainers.bigDef) then
             self:Create(parent)
         end

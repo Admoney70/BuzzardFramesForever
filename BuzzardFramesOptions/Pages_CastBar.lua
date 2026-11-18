@@ -55,6 +55,8 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- The section profile currently being modified. With the per-layout
 -- toggle OFF, GetSectionProfile ignores the flat and returns the global;
@@ -741,7 +743,7 @@ function PAGES.appearance()
               end },
             Col("borderColor", "Border Color", true, { hidden = NoBorder }),
         }},
-        { title = "Empowered Casts", preset = "form", fields = {
+        { title = "Empowered Casts", preset = "form", hidden = ForeverHide(), fields = { -- [FOREVER] F9
             -- empowerInfo, as a note: visible with the section (not gated
             -- on the pips toggle), as in the Ace page.
             { control = "note", wide = true, hidden = Off,

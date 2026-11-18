@@ -279,9 +279,20 @@ end
 -- being information after the first one and is then just noise on all the
 -- rest.
 
+-- A control may declare `leadDesc`: words every field of that control
+-- opens its tooltip with (the anchor composite: "The point on the frame to
+-- attach to."). The field's own `desc` follows it as a second paragraph,
+-- so a page's specific note -- "changing this resets the Grow Direction"
+-- -- is kept, not replaced.
 local function DescOf(node, ctx)
     local d = node and (node.desc or node.tooltip)
     if type(d) == "function" then d = d(node, ctx) end
+    local def = node and node.control and ns.builtinControls
+                and ns.builtinControls[node.control]
+    local lead = def and def.leadDesc
+    if lead then
+        d = (d and d ~= "") and (lead .. "\n\n" .. tostring(d)) or lead
+    end
     return d
 end
 

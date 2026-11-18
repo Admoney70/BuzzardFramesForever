@@ -7,6 +7,7 @@
 -- Extracted from Core.lua in the Core split refactor.
 -- ============================================================
 local BF = _G["BuzzardFrames"]
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 -- ============================================================
 -- SHARED SLOT CONSTANTS
@@ -380,6 +381,16 @@ end
 function BF:ResolveActiveFlat(slot)
     local lp = self.rpDB.profile.layouts
     local specIDStr = self.playerSpecID and tostring(self.playerSpecID)
+    -- [FOREVER] begin
+    -- Forever: Class -> Role -> Global. The class layer takes the spec
+    -- layer's place and specOverrides is never read. Solo role behavior:
+    -- see Forever/Forever_ClassOverrides.lua.
+    if IS_FOREVER then
+        specIDStr = nil
+        local classID = BF.Forever.ResolveLayoutClassOverride(lp, slot)
+        if classID then return classID end
+    end
+    -- [FOREVER] end
 
     if specIDStr
        and lp.specOverrides and lp.specOverrides[specIDStr]
@@ -430,6 +441,14 @@ function BF:ResolveValidFlatForSlot(slot, requiredType)
 
     -- 1. Spec override
     local specIDStr = self.playerSpecID and tostring(self.playerSpecID)
+    -- [FOREVER] begin
+    -- Forever: the class override replaces this layer (same validity check).
+    if IS_FOREVER then
+        specIDStr = nil
+        local classID = BF.Forever.ResolveLayoutClassOverride(lp, slot, fl, requiredType)
+        if classID then return classID end
+    end
+    -- [FOREVER] end
     if specIDStr
        and lp.specOverrides and lp.specOverrides[specIDStr]
     then
@@ -633,11 +652,18 @@ function BF:InvalidateRaidProfileCache()
         for k in pairs(self._sectionProfileCache) do
             self._sectionProfileCache[k] = nil
         end
-        -- v94 PERF (Win 4): bump the section-config generation so per-frame
-        -- stamped section config (HealthText._bf_htCfg; same pattern as
-        -- AbsorbBars._absorbStyleGen) re-resolves on the next Update.
-        self._sectionCfgGen = (self._sectionCfgGen or 0) + 1
     end
+    -- v94 PERF (Win 4): bump the section-config generation so per-frame
+    -- stamped section config (HealthText._bf_htCfg; same pattern as
+    -- AbsorbBars._absorbStyleGen) re-resolves on the next Update.
+    -- UNCONDITIONAL since 2026-11-17: it used to sit inside the
+    -- _sectionProfileCache wipe above, so a context change made before that
+    -- cache table existed moved nothing and every generation-keyed consumer
+    -- kept the old context's config.
+    self._sectionCfgGen = (self._sectionCfgGen or 0) + 1
+    -- Status text: re-apply each scope's block to every frame of that scope
+    -- (Indicators/StatusText_Overlay.lua, RunScopePass).
+    if self.ScheduleStatusTextPass then self:ScheduleStatusTextPass() end
     -- Also wipe per-CFG-flat section caches. CFG frames cache their
     -- resolved section profiles on the flat to avoid re-resolving
     -- per-unit in :Update (same principle as the global cache above).
@@ -990,6 +1016,8 @@ function BF:_InvalidateSectionViews(section)
     -- section edit must also move the generation so stamped per-frame cfg
     -- (HealthText._bf_htCfg) re-resolves.
     self._sectionCfgGen = (self._sectionCfgGen or 0) + 1
+    -- Status text: see the same call in InvalidateRaidProfileCache.
+    if self.ScheduleStatusTextPass then self:ScheduleStatusTextPass() end
     if self._sectionProfileCache then
         self._sectionProfileCache[section] = nil
     end
@@ -1128,7 +1156,7 @@ end
 --      deliberately NOT the active Layout: a key the group never stored
 --      must not change with the instance the player is standing in.
 --
--- `raw` may be an empty table (a scope whose copy is not materialised).
+-- `raw` may be an empty table (a scope whose copy is not materialized).
 -- Returns a fresh plain table; callers cache it. READ-ONLY by convention.
 function BF:BuildMergedSectionView(section, raw, fallback, isSubtabOn)
     local global  = self.rpDB and self.rpDB.profile and self.rpDB.profile[section]
@@ -1321,7 +1349,7 @@ end
 -- re-enters the group's scope; a resolver that asked `self` for its
 -- fallback would ask the proxy, which would ask the resolver, without end.
 
--- The section's own copy on the group's flat, materialised and wired.
+-- The section's own copy on the group's flat, materialized and wired.
 -- Returns the RAW table (never a view). nil when the group has no flat.
 function BF:MaterializeCFGSection(grp, section)
     local flat = grp and grp.flat
@@ -1329,7 +1357,7 @@ function BF:MaterializeCFGSection(grp, section)
     local t = rawget(flat, section)
     if type(t) ~= "table" then
         t = {}
-        -- Cast bars: a freshly materialised group castBar section always
+        -- Cast bars: a freshly materialized group castBar section always
         -- seeds OFF (owner rule 2026-08-13).
         if section == "castBar" then t.enabled = false end
         flat[section] = t
@@ -1471,11 +1499,11 @@ local function SeedCFGSubtab(tbl, section, subtabId, src)
 end
 
 -- Flip the section MASTER. Returns true when it changed. On the way ON:
--- materialise the group's copy and, for a split section, seed every
+-- materialize the group's copy and, for a split section, seed every
 -- subtab that is (still) on from what the group rendered with, so the
 -- flip changes nothing on screen. Rawkeys the group already holds (an
 -- earlier ON -> OFF -> ON) are preserved as cache, as SetSectionPerLayout
--- does. Master-only sections are materialised and not seeded, as before.
+-- does. Master-only sections are materialized and not seeded, as before.
 -- Caches for the live frames are the caller's (the panel's refresh chain
 -- wipes _sectionCache and _auraCache and repaints).
 function BF:SetCFGSectionOverride(grp, section, enabled)
@@ -2160,7 +2188,8 @@ BF.SECTION_SUBTAB_KEYS = {
         names = { "adjustNameFont", "nameFont", "nameFontBorder", "nameFontSize",
             "adjustNameColors", "classColorNames", "nameColor", "namePosition",
             "abbreviateNames", "maxNameChars", "capitalizeNames",
-            "transliterateCyrillicNames" },
+            "transliterateCyrillicNames",
+            "showLastName" }, -- [FOREVER] Show Last Name (Forever/Forever_Names.lua); never set on Retail
         healthText = { "showHealthText", "healthTextFormat", "healthTextPctSymbol",
             "healthTextPosition", "healthTextX", "healthTextY", "adjustHealthFont",
             "healthFont", "healthFontBorder", "healthFontSize",
@@ -2192,14 +2221,18 @@ BF.SECTION_SUBTAB_KEYS = {
         raidTarget = { "showRaidTargetIcon", "raidTargetIconSize",
             "raidTargetIconPosition" },
         pingIndicator = { "showPingIndicator", "pingIndicatorSize",
-            "pingIndicatorPosition" },
+            "pingIndicatorPosition", "pingIgnoreRangeFade" },
         leaderAssistant = { "showLeaderIcon", "leaderIconSize",
             "leaderIconPosition", "showAssistantIcon", "assistantIconSize",
             "assistantIconPosition" },
         missingRaidBuff = { "showMissingRaidBuff", "showMissingRaidBuffInCombat",
             "showMissingSymbiotic", "missingRaidBuffSize",
             "missingRaidBuffShowGlow", "missingRaidBuffAnchor",
-            "missingRaidBuffOffsetX", "missingRaidBuffOffsetY" },
+            "missingRaidBuffOffsetX", "missingRaidBuffOffsetY",
+            "missingRaidBuffSpacing", "missingRaidBuffs",
+            "missingRaidBuffLoadInstance", "missingRaidBuffInstanceTypes",
+            "missingRaidBuffIconEffect", "missingRaidBuffIconEffectGlowStyle",
+            "missingRaidBuffIconEffectColor", "missingRaidBuffDesaturate" },
         statusIcons = { "showReadyCheck", "showPhased", "showSummonPending",
             "showResurrectPending", "showVehicleIcon",
             "resurrectPendingIconStyle", "statusIconSize", "statusIconPosition" },
@@ -2244,7 +2277,7 @@ BF.SECTION_SUBTAB_KEYS = {
             "useCustomHealAbsorbSymbolColor", "healAbsorbSymbolColor",
             "healAbsorbBarHeight", "useCustomHealAbsorbTexture",
             "healAbsorbTexture" },
-        healPrediction = { "showHealPrediction", "healPredictionAnchor",
+        healPrediction = { "showHealPrediction", "healPredictionAnchor", "healPredictionSource",
             "healPredictionColor", "useCustomHealPredictionTexture",
             "healPredictionTexture" },
         reducedMax = { "showReducedMaxHealth", "useCustomReducedMaxTexture",

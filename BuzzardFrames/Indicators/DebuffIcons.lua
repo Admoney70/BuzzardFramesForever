@@ -21,6 +21,7 @@ Icon pool is pre-allocated by ApplyAuraGeometry (AuraConfig.lua).
 ]]
 
 local BF  = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 local ipairs           = ipairs
 local math_floor       = math.floor
@@ -143,6 +144,7 @@ local _myDispelSpecID = nil
 BF.MyDispelGen = 0
 
 local function ResolveMySpecID()
+    if IS_FOREVER then return BF.Forever.MyDispelKey() end -- [FOREVER] class (+ level gate) key, Forever_Dispel.lua
     local idx = GetSpecialization and GetSpecialization()
     if not idx then return nil end
     return GetSpecializationInfo and select(1, GetSpecializationInfo(idx)) or nil
@@ -168,6 +170,7 @@ function BF:MyDispelTypes(ac)
 
     local out = {}
     local def = _myDispelSpecID and DISPEL_TYPES_BY_SPEC[_myDispelSpecID]
+    if IS_FOREVER then def = BF.Forever.DispelDefForKey(_myDispelSpecID, talented) end -- [FOREVER] class table
     if def then
         if def.base then FoldDispelLayer(out, def.base) end
         if def.talents then
@@ -262,6 +265,7 @@ do
     owner:Sub("PLAYER_SPECIALIZATION_CHANGED", OnDispelRefresh, "player")
     owner:Sub("PLAYER_TALENT_UPDATE",          OnDispelRefresh, "unitless")
     owner:Sub("TRAIT_CONFIG_UPDATED",          OnDispelRefresh, "unitless")
+    if IS_FOREVER then BF.Forever.SubscribeDispelRefresh(owner, OnDispelRefresh) end -- [FOREVER] PLAYER_LEVEL_UP + SPELLS_CHANGED
 end
 
 -- v91: "Dispellable by me" as (filterString, includeDispelTypesMap). Kept as
@@ -1499,7 +1503,7 @@ local function DebuffContainerSpecs(frame)
         rowSpacing    = ac.debuffRowSpacing,
         maxIcons      = ac.maxDebuffs or 8,
         -- aurasAbovePowerBar lift: resolved inside ApplyAuraGridGeometry
-        -- (bottom-anchor gate + clipFrame target) and re-resolved by
+        -- (bottom-anchor gate + container target) and re-resolved by
         -- ReanchorFrameAuraContainers on power-bar toggles.
         canLift       = true,
     }
@@ -3125,7 +3129,7 @@ BF.DebuffsShownForFrame = DebuffsShownFor
 -- claims pass applies.
 --
 -- LEVELS are BF.CONTAINER_FX_LEVEL, fixed, one rung below each dispel kind.
--- Never re-levelled at runtime: only the BUFF-side Prioritise toggles move a
+-- Never re-leveled at runtime: only the BUFF-side Prioritize toggles move a
 -- host, and this feature has no such toggle.
 local _dbfxEntry = {}   -- scratch restamp entry; consumed synchronously
 
@@ -3748,6 +3752,9 @@ function DebuffIcons:Layout(parent)
         -- (Auras/ContainerFactory.lua): every engine call below is pcall'd, so a
         -- combat /reload can leave this frame partially applied, silently.
         BF:NoteAuraLayoutRestricted(parent)
+        -- Duration Bar Stage 5: re-derive the frame's static push on first use
+        -- this pass (BF.SingleBuffBarPushFor, BuffsAndContainers.lua).
+        if BF.InvalidateSingleBuffBarPush then BF.InvalidateSingleBuffBarPush(parent) end
         if not (parent._bf_auraContainers and parent._bf_auraContainers.debuffs) then
             self:Create(parent)
         end

@@ -30,9 +30,8 @@ local IsInRaid                = IsInRaid
 -- AddPrivateAuraAnchor work in combat. Grid2's Overlay_Update /
 -- Overlay_Layout have no InCombatLockdown guards.
 
--- 12.0.5+ supports isContainer in AddPrivateAuraAnchor args.
-local CLIENT_VERSION = select(4, GetBuildInfo())
-local IS_CONTAINER_SUPPORTED = CLIENT_VERSION >= 120005
+-- isContainer in AddPrivateAuraAnchor args is supported on every client this
+-- addon loads on (12.0.5+ and Forever), so the old >= 120005 build gate is gone.
 
 -- ============================================================
 -- DEBUG INSTRUMENTATION
@@ -204,7 +203,6 @@ end
 -- Grid2 removes the anchor in Layout so Update re-registers it.
 function DispelIndicator:Layout(parent)
     if not parent then return end
-    if not IS_CONTAINER_SUPPORTED then return end
 
     -- v60: per-frame (see FrameDispelProfile) so a Custom Frame Group's own
     -- Dispellable Debuffs settings drive its overlay.
@@ -318,7 +316,6 @@ end
 -- it just pcalls AddPrivateAuraAnchor and accepts the error.
 function DispelIndicator:Update(parent, unit)
     if not parent or not unit then return end
-    if not IS_CONTAINER_SUPPORTED then return end
 
     -- Lazy init: UpdateSettings reads profile data to cache
     -- _containerDispelMode and register the UNIT_AURA handler.

@@ -89,7 +89,8 @@ end
 -- all three -- why table identity is the scope, why weak keys and the
 -- generation key cover two different section-table lifetimes, and why the
 -- generation key rather than the push is what closes the staleness window --
--- is written out once at Indicators/StatusText_Overlay.lua:197-236 and is not
+-- is written out once at the SECTION-TABLE CACHE KEYS comment in
+-- Indicators/StatusText_Overlay.lua and is not
 -- repeated in every indicator. In-tree precedent: BFStatus.lua:993-1005 (scope
 -- key) and Indicators/HealthText.lua:129/:417 (generation key).
 --
@@ -197,8 +198,17 @@ function PowerBar:Layout(parent)
 	-- thickness (2/3px) regardless of the square-border thickness
 	-- slider — must match Container:Layout's content inset. Resolved in the
 	-- block; converted here, never cached (see the block comment).
-	local borderN = block.borderN
-	local borderUI = PixelsToUI(borderN)
+	--
+	-- The CONVERSION is Container:Layout's own (owner 2026-10-12): the
+	-- borderUI BF.ComputeFrameContentGeometry returns, scaled by the frame's
+	-- effective scale -- the width the frame border is drawn at and the
+	-- content inset is derived from. The UIParent-scale PixelsToUI used here
+	-- before differs from it whenever the frame scale is not 1, so the power
+	-- bar's top edge and the content rect's bottom edge drifted apart.
+	-- PixelsToUI stays as the fallback for a frame with no healthPower
+	-- profile (the geometry answers nil then).
+	local _, _, _, _, _, borderUI = BF.ComputeFrameContentGeometry(parent)
+	if not borderUI then borderUI = PixelsToUI(block.borderN) end
 	-- Always set the full height — visibility is controlled by Update, not Layout.
 	-- This prevents a height=0 bar when Layout runs while showPowerBar is off
 	-- but a unit later becomes eligible for a power bar.
@@ -227,6 +237,30 @@ function PowerBar:Layout(parent)
 		tex:ClearAllPoints()
 		tex:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
 		tex:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 0, 0)
+	end
+end
+
+-- A visibility FLIP re-runs Container:Layout (below), which moves the
+-- content rect and republishes _bf_contentH. The cast bar is the one
+-- indicator that SIZES itself from that value at Layout time (CastBar:Layout:
+-- barH = _bf_contentH * pct), so it is re-laid out right after the container,
+-- in the indicators' registered order -- the live twin of
+-- ApplyPreviewPowerBar's flip re-layout (owner 2026-10-12). Gated exactly as
+-- a frame Layout gates it (enabled list + BF:ShouldLayoutIndicator), and only
+-- when the bar is already BUILT: CastBar:Layout's own feature-off arm still
+-- parks it, and a frame that never built one is left alone. Flip-only, so
+-- nothing per update or per aura; the power bar does not flip in combat.
+local function RelayoutCastBarOnFlip(parent)
+	local inds = BF:GetIndicatorsEnabled()
+	if not inds then return end
+	for i = 1, #inds do
+		local ind = inds[i]
+		if ind.name == "castBar" then
+			if parent[ind.name] and BF:ShouldLayoutIndicator(ind, parent) then
+				ind:Layout(parent)
+			end
+			return
+		end
 	end
 end
 
@@ -268,9 +302,10 @@ function PowerBar:Update(parent, unit)
 		if wasShown then
 			local containerInd = BF:GetIndicatorByName("container")
 			if containerInd then containerInd:Layout(parent) end
+			RelayoutCastBarOnFlip(parent)
 			-- Power bar just disappeared: invalidate aura icon position caches
 			-- so ScanAndDisplay re-anchors them to frame instead of
-			-- healthBar.clipFrame (when aurasAbovePowerBar is enabled).
+			-- frame.container (when aurasAbovePowerBar is enabled).
 			BF:InvalidateAuraPositionCache(parent)
 		end
 		-- Maintain pre-resolved per-frame visibility flag used by the
@@ -286,8 +321,9 @@ function PowerBar:Update(parent, unit)
 	if wasHidden then
 		local containerInd = BF:GetIndicatorByName("container")
 		if containerInd then containerInd:Layout(parent) end
+		RelayoutCastBarOnFlip(parent)
 		-- Power bar just appeared: invalidate aura icon position caches
-		-- so ScanAndDisplay re-anchors them to healthBar.clipFrame
+		-- so ScanAndDisplay re-anchors them to frame.container
 		-- instead of frame (when aurasAbovePowerBar is enabled).
 		BF:InvalidateAuraPositionCache(parent)
 	end

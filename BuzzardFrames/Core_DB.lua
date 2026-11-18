@@ -39,7 +39,14 @@ local BF = _G["BuzzardFrames"]
 -- acDB SavedVariables (it lives in the weak BF._containerHasSotF map now).
 -- 2026-08-25: 77 = purge the two Swiftmendable health-TEXT keys (no 12.1
 -- path ever existed) and seed the Swiftmendable pseudo entry in the Buff List.
-local DB_VERSION = 80
+-- 2026-10-14: 81 = Buff List entries gain Show Frame Effects; it is switched
+-- on for every entry whose frame effects rendered before (MigrateFrameFxShowSwitch).
+-- 2026-11-16: 82 = the Show Missing Symbiotic Relationship switch becomes the
+-- Druid Symbiotic Relationship tick in Missing Raid Buff's Enabled Buffs
+-- (MigrateMissingRaidBuffEnabled).
+-- 2026-11-17: 83 = Missing Raid Buff's Show Glow becomes the Icon Effect
+-- dropdown; Show Glow on -> Marching Ants (MigrateMissingRaidBuffIconEffect).
+local DB_VERSION = 83
 
 function BF:RegisterDB()
     -- Is this the user's very first session with the addon? Captured HERE,
@@ -72,11 +79,39 @@ function BF:RegisterDB()
     --
     -- Each DB uses "Default" as the default profile (third arg = true),
     -- matching the old namespace cascade behavior for fresh installs.
+    --
+    -- Whether this character already had a profileKeys entry in each
+    -- module DB. Captured BEFORE AceDB:New, which writes one, so it is the
+    -- only moment the answer is available. Consumed by
+    -- RestoreGlobalProfile below (character-specific modules move only a
+    -- character with no prior entry onto their default profile).
+    local charKey = UnitName("player") .. " - " .. GetRealmName()
+    local function HadProfileEntry(svName)
+        local sv = _G[svName]
+        return type(sv) == "table" and type(sv.profileKeys) == "table"
+            and sv.profileKeys[charKey] ~= nil
+    end
+    local hadEntry = {
+        ufDB  = HadProfileEntry("BuzzardFramesUnitFramesDB"),
+        acDB  = HadProfileEntry("BuzzardFramesAuraCustomizationsDB"),
+        cfgDB = HadProfileEntry("BuzzardFramesCustomFrameGroupsDB"),
+        rpDB  = HadProfileEntry("BuzzardFramesRaidPartyFramesDB"),
+        icDB  = HadProfileEntry("BuzzardFramesIncomingCastsDB"),
+    }
     self.ufDB  = LibStub("AceDB-3.0"):New("BuzzardFramesUnitFramesDB",         self.unitFrameDefaults,          true)
     self.acDB  = LibStub("AceDB-3.0"):New("BuzzardFramesAuraCustomizationsDB", self.auraCustomizationDefaults,  true)
     self.cfgDB = LibStub("AceDB-3.0"):New("BuzzardFramesCustomFrameGroupsDB",  self.customFrameGroupDefaults,   true)
     self.rpDB  = LibStub("AceDB-3.0"):New("BuzzardFramesRaidPartyFramesDB",    self.raidPartyFrameDefaults,     true)
     self.icDB  = LibStub("AceDB-3.0"):New("BuzzardFramesIncomingCastsDB",      self.incomingCastsDefaults,      true)
+    -- Put this character on each module's saved account-wide profile
+    -- (global modules) or its default profile for new characters
+    -- (character-specific modules). AceDB alone would leave a character
+    -- with no profileKeys entry on "Default". Must run before the
+    -- migration block and before the profile callbacks are registered
+    -- below, so the switch fires no refresh. See Core_ProfileLifecycle.lua.
+    for _, field in ipairs({ "ufDB", "acDB", "cfgDB", "rpDB", "icDB" }) do
+        self:RestoreGlobalProfile(self[field], hadEntry[field])
+    end
     -- §L5.1: six AceDB:New calls done (defaults merge per DB). db.global
     -- exists from here on, so every mark below can be a DETAIL mark.
     self:LoadMark("init:dbCreated")
@@ -213,7 +248,7 @@ function BF:RegisterDB()
     -- ── One-shot: showSetupGrid relocated db.profile -> db.global ─────────
     -- The default has always been declared under `global` (Defaults.lua) and
     -- MigrateGlobalSettings hoists the saved value there, but the options
-    -- widget (Preview/Options_Preview.lua) and BF:UpdateSetupGrid both read
+    -- widget (now BuzzardFramesOptions/Panel.lua) and BF:UpdateSetupGrid both read
     -- db.profile. So the hoisted value was never seen, the declared default
     -- (true) never applied, and db.profile.showSetupGrid was nil -- falsy --
     -- which silently defaulted the setup grid to OFF. Both read sites now use
@@ -346,6 +381,12 @@ function BF:RegisterDB()
     BF.db.global.testSummonPending    = false
     BF.db.global.testResurrectPending = false
     BF.db.global.testVehicleIcon      = false
+    -- 2026-11-16: the other Icons tabs' test switches, same lifetime.
+    BF.db.global.testRaidTargetIcon   = false
+    BF.db.global.testLeaderIcon       = false
+    BF.db.global.testAssistantIcon    = false
+    BF.db.global.testPingIndicator    = false
+    BF.db.global.testMissingRaidBuff  = false
     -- v70: previewModeBuffs/previewModeDebuffs persist across reloads
     -- intentionally (user preference); they are account-wide db.global keys and
     -- are not reset here alongside the test-mode flags above.
@@ -449,7 +490,7 @@ function BF:RegisterDB()
             -- Migration 1: set new default absorb / overshield colors.
             -- Old defaults were all white (#ffffff @ 100%). Overwrite only
             -- profiles still on the old defaults so users who already
-            -- customised their colors keep their values.
+            -- customized their colors keep their values.
             local function isOldWhite(c)
                 return c and c.r == 1 and c.g == 1 and c.b == 1 and c.a == 1
             end
@@ -2219,6 +2260,45 @@ function BF:RegisterDB()
             self:MigrateContainerSpellsToBuffList()
         end
 
+        if ver < 81 then
+            -- ── Migration 81: SHOW FRAME EFFECTS (Display-tab redesign).
+            -- A Buff List entry's frame effects (health tint, frame border,
+            -- overlay) now render only while its new Show Frame Effects
+            -- switch is on, and no longer need Customize Buff. The switch is
+            -- turned on for exactly the entries whose effects rendered
+            -- before -- Customize Buff on and an effect row not disabled --
+            -- so nothing changes on screen; an entry whose effects were
+            -- configured but hidden by Customize Buff off stays off. acDB
+            -- walks itself once, sentinel-guarded per profile
+            -- (_frameFxSwitchV81), idempotent. See MigrateFrameFxShowSwitch
+            -- in Core_Migrations.lua.
+            if self.MigrateFrameFxShowSwitch then self:MigrateFrameFxShowSwitch() end
+        end
+
+        if ver < 82 then
+            -- ── Migration 82: MISSING RAID BUFF ENABLED BUFFS.
+            -- icons.showMissingSymbiotic is retired; Symbiotic Relationship
+            -- is the Druid row's tick in Enabled Buffs, under the main Show
+            -- Missing Raid Buff switch. Every icons table (each profile's
+            -- global section, every Layout's own copy, every Custom Frame
+            -- Group's) that had it on gets an explicit Enabled Buffs table
+            -- reproducing what it showed before. Idempotent: a table that
+            -- already holds missingRaidBuffs is left alone. See
+            -- MigrateMissingRaidBuffEnabled in Core_Migrations.lua.
+            if self.MigrateMissingRaidBuffEnabled then self:MigrateMissingRaidBuffEnabled() end
+        end
+
+        if ver < 83 then
+            -- ── Migration 83: MISSING RAID BUFF ICON EFFECT.
+            -- icons.missingRaidBuffShowGlow is retired for the Buffs-style
+            -- Icon Effect dropdown. The old glow was red marching ants, so
+            -- every icons table that had it on gets Icon Effect = Marching
+            -- Ants (the Effect Color default is that same red). Idempotent:
+            -- a table already holding an Icon Effect is left alone. See
+            -- MigrateMissingRaidBuffIconEffect in Core_Migrations.lua.
+            if self.MigrateMissingRaidBuffIconEffect then self:MigrateMissingRaidBuffIconEffect() end
+        end
+
         p.dbVersion = DB_VERSION
     end
     -- §L5.1: the whole 56-block versioned dispatcher. Expected ~0 on a
@@ -2282,7 +2362,7 @@ function BF:RegisterDB()
     -- features were removed, but nothing ever nilled the data they left
     -- behind. It persists once per profile in the global pseudo-Layout, once
     -- per Layout flat and once per Custom Frame Group flat. (When this purge
-    -- was written the old exporter serialised whole profile tables verbatim,
+    -- was written the old exporter serialized whole profile tables verbatim,
     -- so every export string also carried the dead payload into every
     -- recipient; the format-4 exporter is whitelist-driven, so today the
     -- purge is about SavedVariables hygiene and legacy-string imports.)
@@ -2493,6 +2573,44 @@ function BF:RegisterDB()
     -- of reload-sensitive keys and compare them to the new profile in
     -- OnProfileChanged. If any differ, a reload popup is shown.
     self.ufDB.RegisterCallback(self, "OnProfileShutdown", "OnUFProfileShutdown")
+
+    -- "Default" always exists in every module DB. It cannot be renamed or
+    -- deleted (Profiles > Profile Management), but older builds allowed a
+    -- rename, which left a module with no "Default" until some character
+    -- happened to start on it. Create it here, empty (= stock defaults), when
+    -- missing. AceDB never prunes empty profiles from root DBs at logout, so
+    -- this runs once per module, the first time it is found missing.
+    --
+    -- Placed AFTER the login profile restore (every character is already on
+    -- its profile, so this moves no one) and AFTER the migration dispatcher
+    -- and callback registration, i.e. the same point in the login order at
+    -- which a normally created profile gets its OnNewProfile setup.
+    --
+    -- AceDB fires OnNewProfile only when IT creates the table, so the one
+    -- module with an OnNewProfile handler (acDB, registered just above) is
+    -- given the same call directly. MigrateAurasUnified is safe on the bare
+    -- table: the only acDB profile defaults are two empty tables, which its
+    -- stages create or skip when absent -- the dispatcher already runs it on
+    -- bare stored profiles for every non-active profile.
+    --
+    -- All five are created BEFORE that call: its rpDB half reads the rpDB
+    -- "Default" by name and would skip it if it did not exist yet.
+    local createdACDefault = false
+    for _, field in ipairs({ "ufDB", "acDB", "cfgDB", "rpDB", "icDB" }) do
+        local db = self[field]
+        local sv = db and db.sv
+        if sv then
+            sv.profiles = sv.profiles or {}
+            if sv.profiles["Default"] == nil then
+                sv.profiles["Default"] = {}
+                if field == "acDB" then createdACDefault = true end
+            end
+        end
+    end
+    if createdACDefault then
+        self:EnsureAurasMigratedForProfile(nil, nil, "Default")
+    end
+
     -- §L5.1: RegisterDB done. init:dbDone - init:enter is the RegisterDB
     -- half of OnInitialize; init:exit - init:dbDone is RegisterOptions.
     self:LoadMark("init:dbDone")

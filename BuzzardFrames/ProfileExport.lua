@@ -311,6 +311,15 @@ local RP_LAYOUTS_KEYS = {
     scaleRaidToFit = true, scaleRaidToFitMaxWidth = true,
     showLayoutAnnounce = true,
 }
+-- [FOREVER] begin
+-- Forever-only key, registered ONLY on Forever: adding it on Retail would
+-- resize this table, change its pairs() order and with it the insertion
+-- order of the exported layouts table -- and AceSerializer writes keys in
+-- pairs() order, so Retail strings would stop being byte-identical.
+if BF.isForever then
+    RP_LAYOUTS_KEYS.classOverrides = true
+end
+-- [FOREVER] end
 -- (Every "_" key on layouts — _flatLayoutsMigrated,
 -- _roleSpecOverridesMigrated, _flatsCollapsedToSparse,
 -- _perLayoutSectionFallbacksWired, _showGroupBackfilled — is
@@ -339,6 +348,9 @@ local AC_SECTIONS = {
     specSpellIconEffect = true, specSpellIconType = true,
     specSpellCooldownText = true, specSpellBounce = true,
     specSpellCustomized = true,
+    -- Duration Bar plan: Show Icon off, text in the icon's place, the bar.
+    specSpellIconHidden = true, specSpellTextInPlace = true,
+    specSpellBar = true,
     specBuffsBorder = true, specBuffsBorderColor = true,
     specBuffsOverlay = true, specBuffsSolidIcon = true,
     -- swiftmendHealthTextColor / swiftmendRecolorHealthText REMOVED: health
@@ -439,6 +451,16 @@ local UF_DYNAMIC = {
     focusCastBarAnchorX = true, focusCastBarAnchorY = true,
     targetCastBarAnchorSaved = true, focusCastBarAnchorSaved = true,
 }
+-- [FOREVER] begin
+-- Forever-only Unit Frame Layout Assignment keys (plan 13 Phase H). Same
+-- reason as the RP_LAYOUTS_KEYS block above: registered only on Forever so
+-- Retail export output is untouched.
+if BF.isForever then
+    UF_DYNAMIC.ufClassLayouts          = true
+    UF_DYNAMIC.ufClassLayoutAssignment = true
+    UF_DYNAMIC.enableUFClassLayouts    = true
+end
+-- [FOREVER] end
 
 -- 2026-08-24 dead-key sweep: ufDB keys with NO live reader anywhere.
 -- Never exported; migration 74 purges them from SavedVariables (except
@@ -774,6 +796,7 @@ local function EntryCoversSpec(c, sid, specId)
 end
 
 local function BuildSingleBuffPortable(profile)
+    if BF.isForever then return nil end -- [FOREVER] Forever exports the Buff List WHOLE (no curated diff against Retail SPEC_SPELLS)
     local containers = profile.customBuffContainers
     if type(containers) ~= "table" then return nil end
     local H = BF._CuratedSBHelpers
@@ -861,7 +884,7 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
     -- 1. Ensure the curated mint ran for this profile (idempotent — the
     --    per-profile sentinel makes this free when OnNewProfile got there
     --    first, which it normally does).
-    if self.MigrateAurasUnified then
+    if self.MigrateAurasUnified and not BF.isForever then -- [FOREVER] no Retail curated mint on Forever
         self:MigrateAurasUnified(profileName)
     end
     local containers = acp.customBuffContainers
@@ -882,6 +905,10 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
     --    sequence let an earlier diff that widened loadSpecTypes onto a
     --    second spec steal that spec's own diff — the later merge then
     --    overwrote the first entry and the sweep deleted the real one).
+    -- Header-fix round, item 3: every entry THIS import writes (diff
+    -- targets, rebuilt curated rows, whole entries), for the dbVersion-81
+    -- frame-effects rule at the end.
+    local touched = {}
     local targets, consumedRow = {}, {}
     for di = 1, #(portable.diffs or {}) do
         local rec = portable.diffs[di]
@@ -903,6 +930,7 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
         if target then
             self:DeepMergeProfile(rec.d, target)
             mintedUntouched[target] = nil
+            touched[#touched + 1] = target
         else
             -- No minted row (curated list drift within the same schema —
             -- rare). Rebuild canonical + diff and append; never drop the
@@ -922,6 +950,7 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
             self:DeepMergeProfile(rec.d, canon)
             canon.singleBuffKey = H.mintKey(containers, rec.sid)
             containers[#containers + 1] = canon
+            touched[#touched + 1] = canon
         end
     end
 
@@ -977,6 +1006,7 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
             end
             containers[#containers + 1] = e
             appended[#appended + 1] = e
+            touched[#touched + 1] = e
             if type(w.idx) == "number" then idxMap[w.idx] = #containers end
         end
     end
@@ -988,16 +1018,34 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
     -- the receiver's. A key that never arrived is NOT left alone: it would
     -- resolve against the receiver's identically-named container, which is
     -- exactly the mix-up above, so it falls back to the general Buffs anchor.
+    --
+    -- Review fix A1: the same rule covers every tier that can carry such a
+    -- value -- the entry's own anchorPoint, each per-Layout groupSettings
+    -- copy of it, and the BAR's Anchor Point at the bar entry and each of
+    -- its per-Layout copies. A tier left in the exporter's namespace is the
+    -- same mix-up on one Layout, or for the bar alone.
+    local function remapTier(t)
+        local v = t.anchorPoint
+        local key = type(v) == "string" and v:match("^C:(.+)$")
+        if key then
+            if keyRemap[key] then
+                t.anchorPoint = "C:" .. keyRemap[key]
+            elseif not arrivedKey[key] then
+                t.anchorPoint = "BUFFS"
+            end
+        end
+    end
     for i = 1, #appended do
         local e = appended[i]
-        if e.singleBuff and type(e.anchorPoint) == "string" then
-            local key = e.anchorPoint:match("^C:(.+)$")
-            if key then
-                if keyRemap[key] then
-                    e.anchorPoint = "C:" .. keyRemap[key]
-                elseif not arrivedKey[key] then
-                    e.anchorPoint = "BUFFS"
+        if e.singleBuff then
+            remapTier(e)
+            if type(e.groupSettings) == "table" then
+                for _, gs in pairs(e.groupSettings) do
+                    if type(gs) == "table" then remapTier(gs) end
                 end
+            end
+            if BF.VisitSingleBuffBarTiers then
+                BF.VisitSingleBuffBarTiers(e, remapTier)
             end
         end
     end
@@ -1020,6 +1068,20 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
         end
     end
 
+    -- 4b. Header-fix round, item 3: SHOW FRAME EFFECTS for strings older than
+    --    dbVersion 81. Imported data never runs the dbVersion dispatcher, so
+    --    an old string's entries would arrive with their frame effects
+    --    configured and the new switch off -- and stop showing. The SAME rule
+    --    migration 81 applies (BF.ApplyFrameFxShowSwitchRule, Core_Migrations:
+    --    Customize Buff on + an effect row not disabled), to the entries this
+    --    import wrote and nothing else: the receiver's own entries are already
+    --    migrated. The source version is stamped by DecodeProfileString
+    --    (srcDbVersion; absent = an old string).
+    if (tonumber(portable.srcDbVersion) or 0) < (BF.FRAME_FX_SWITCH_DB_VERSION or 81)
+       and BF.ApplyFrameFxShowSwitchRule then
+        for i = 1, #touched do BF.ApplyFrameFxShowSwitchRule(touched[i]) end
+    end
+
     -- 5. Candidacy sweep over minted rows the import did not touch: the
     --    mint's own guards, re-evaluated against the FINAL state. A row
     --    whose spell is now assigned to a container, or covered by an
@@ -1027,6 +1089,7 @@ function BF:ApplySingleBuffPortable(acp, portable, profileName)
     --    renumber-aware remover, which repoints c:N on shift). A row that
     --    is merely ABSENT from the export stays: that is the owner's
     --    deletions-do-not-propagate ruling.
+    if BF.isForever then return end -- [FOREVER] no curated sweep: Forever has no Retail SPEC_SPELLS rows
     local doomed = {}
     for i = 1, #containers do
         local c = containers[i]
@@ -1384,7 +1447,7 @@ end
 --
 -- WHY THIS EXISTS: the import flow is db:SetProfile(finalName) followed
 -- by a merge. SetProfile hands back a profile with the CURRENT defaults
--- materialised into it; the old MoveTableKeys then assigned each root
+-- materialized into it; the old MoveTableKeys then assigned each root
 -- key wholesale, so a sparse imported sub-table replaced the fully
 -- defaulted one and every key it did not carry read nil for the rest of
 -- the session. That was survivable while exports were full copies. It is
@@ -1484,6 +1547,13 @@ function BF:ExportProfileString(include, name)
         dbVersion = BF.db and BF.db.profile and BF.db.profile.dbVersion,
         modules   = modules,
     }
+    -- [FOREVER] begin
+    -- game = "forever" is written ONLY on Forever; absent means Retail, so
+    -- every Retail string stays exactly as before.
+    if BF.isForever then
+        BF.Forever.StampExportEnvelope(envelope)
+    end
+    -- [FOREVER] end
 
     -- _globalColors: KEEP AS THEY ARE (owner, 2026-08-24). Always
     -- bundled, straight from rpDB.profile.colors, even when the
@@ -1528,6 +1598,119 @@ end
 -- decoded[moduleKey] = <portable data>, plus decoded._globalColors and
 -- the _format stamp. The envelope's per-module wrapper (schema/data)
 -- exists only to be validated here.
+-- [FOREVER] begin
+-- Forever -> Retail import (plan 13 Phase H). A string exported on WoW
+-- Forever carries envelope.game = "forever"; its Forever-only keys mean
+-- nothing here and are discarded, listed in decoded._importDiscarded for
+-- the import report. This one block lives in a Retail file because the
+-- Forever/ files do not load on Retail (owner-approved exception). A Retail
+-- string (no game field) never reaches it, so Retail-to-Retail imports are
+-- untouched.
+--
+-- Owner rulings (2026-11-05): Forever Buff List entries are NEVER imported
+-- to Retail, and buff containers are specific to the game they were created
+-- on -- so EVERY buff container (single buffs and multi-icon containers,
+-- whole-array or sbPortable shape) is discarded, which leaves the receiving
+-- profile's own Buff List untouched. Any other entry carrying a Forever-only
+-- key (a debuff container with a Class condition) is discarded too.
+local FOREVER_ONLY_ENTRY_KEYS = { "loadClass", "loadClassTypes", "foreverSpellIDs" }
+local function StripForeverOnlyKeys(decoded)
+    local lines = {}
+    local function Note(label, n)
+        if n > 0 then lines[#lines + 1] = string.format("%s (%d)", label, n) end
+    end
+    local function Count(t)
+        local n = 0
+        if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end
+        return n
+    end
+    local function CarriesForeverKey(e)
+        if type(e) ~= "table" then return false end
+        for i = 1, #FOREVER_ONLY_ENTRY_KEYS do
+            if e[FOREVER_ONLY_ENTRY_KEYS[i]] ~= nil then return true end
+        end
+        return false
+    end
+    -- Forever seed / bookkeeping flags (any top-level key named forever*).
+    local nFlags = 0
+    local function ScrubFlags(mod)
+        if type(mod) ~= "table" then return end
+        local doomed = {}
+        for k in pairs(mod) do
+            if type(k) == "string" and k:lower():find("^_?forever") then
+                doomed[#doomed + 1] = k
+            end
+        end
+        for i = 1, #doomed do mod[doomed[i]] = nil end
+        nFlags = nFlags + #doomed
+    end
+
+    local rp = decoded.RaidPartyFrames
+    if type(rp) == "table" and type(rp.layouts) == "table"
+       and rp.layouts.classOverrides ~= nil then
+        Note("Raid/Party Layout Assignments: Class overrides", Count(rp.layouts.classOverrides))
+        rp.layouts.classOverrides = nil
+    end
+    local uf = decoded.UnitFrames
+    if type(uf) == "table" then
+        if uf.ufClassLayouts ~= nil or uf.ufClassLayoutAssignment ~= nil then
+            Note("Unit Frame Layout Assignments: Class overrides",
+                 math.max(Count(uf.ufClassLayouts), 1))
+        end
+        uf.ufClassLayouts, uf.ufClassLayoutAssignment, uf.enableUFClassLayouts = nil, nil, nil
+    end
+    local ac = decoded.AuraCustomizations
+    if type(ac) == "table" then
+        local bd = ac.buffsDisplay
+        if type(bd) == "table" and bd.classOverrides ~= nil then
+            Note("Buffs preset: Class overrides", Count(bd.classOverrides))
+            bd.classOverrides = nil
+        end
+        -- Every buff container, whatever its shape.
+        local nSingle, nMulti = 0, 0
+        local function Tally(e)
+            if type(e) ~= "table" then return end
+            if e.singleBuff then nSingle = nSingle + 1 else nMulti = nMulti + 1 end
+        end
+        if type(ac.customBuffContainers) == "table" then
+            for _, e in pairs(ac.customBuffContainers) do Tally(e) end
+        end
+        local sbp = ac.sbPortable
+        if type(sbp) == "table" then
+            if type(sbp.whole) == "table" then
+                for _, w in ipairs(sbp.whole) do
+                    if type(w) == "table" then Tally(w.entry) end
+                end
+            end
+            if type(sbp.diffs) == "table" then nSingle = nSingle + #sbp.diffs end
+        end
+        ac.customBuffContainers, ac.sbPortable = nil, nil
+        Note("Buff List entries (Single Buffs) created on WoW Forever", nSingle)
+        Note("Buff containers created on WoW Forever", nMulti)
+        -- Debuff containers stay, except one carrying a Forever-only key.
+        -- Compacted in order (the array merges wholesale).
+        local deb = ac.customDebuffContainers
+        if type(deb) == "table" then
+            local kept, dropped = {}, 0
+            for i = 1, #deb do
+                if CarriesForeverKey(deb[i]) then
+                    dropped = dropped + 1
+                else
+                    kept[#kept + 1] = deb[i]
+                end
+            end
+            if dropped > 0 then ac.customDebuffContainers = kept end
+            Note("Debuff containers with a Class load condition", dropped)
+        end
+    end
+    ScrubFlags(rp); ScrubFlags(uf); ScrubFlags(ac)
+    ScrubFlags(decoded.CustomFrameGroups); ScrubFlags(decoded.IncomingCasts)
+    Note("Forever-only bookkeeping flags", nFlags)
+
+    if #lines > 0 then decoded._importDiscarded = lines end
+end
+-- [FOREVER] end
+
 function BF:DecodeProfileString(data)
     if type(data) ~= "string" then
         return false, "Decode failed: expected a string."
@@ -1587,6 +1770,14 @@ function BF:DecodeProfileString(data)
             end
             if type(mod.data) == "table" then
                 decoded[key] = mod.data
+                -- Header-fix round, item 3: the exporter's dbVersion rides
+                -- on the Single Buffs portable, so ApplySingleBuffPortable can
+                -- apply the rules a newer dbVersion introduced (the importer
+                -- runs no migration chain). A fresh deserialized table: safe
+                -- to annotate.
+                if type(mod.data.sbPortable) == "table" then
+                    mod.data.sbPortable.srcDbVersion = tonumber(envelope.dbVersion) or 0
+                end
             end
         end
         -- An unknown module key is IGNORED, not an error: a future
@@ -1597,5 +1788,15 @@ function BF:DecodeProfileString(data)
     if type(envelope._globalColors) == "table" then
         decoded._globalColors = envelope._globalColors
     end
+    -- [FOREVER] begin
+    -- Carry the game stamp (absent = Retail) and drop what the other game
+    -- cannot use; the discards are listed in decoded._importDiscarded.
+    if type(envelope.game) == "string" then decoded.game = envelope.game end
+    if BF.isForever then
+        BF.Forever.FilterDecodedImport(decoded, tonumber(envelope.dbVersion))
+    elseif decoded.game == "forever" then
+        StripForeverOnlyKeys(decoded)
+    end
+    -- [FOREVER] end
     return true, decoded
 end

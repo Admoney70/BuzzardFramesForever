@@ -32,7 +32,7 @@ local table_remove        = table.remove
 local table_wipe          = table.wipe
 -- 12.1: sizes and positions read off a frame parented into the unit-frame
 -- chain come back SECRET, and a secret cannot be compared or used in
--- arithmetic. Localised with the addon's usual fallback.
+-- arithmetic. Localized with the addon's usual fallback.
 local issecretvalue       = issecretvalue or function() return false end
 local pcall               = pcall
 

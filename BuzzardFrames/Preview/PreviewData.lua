@@ -119,6 +119,7 @@ local CF_FAKE_UNIT_DEFAULTS = {
     { name = "CFBuzzard3", class = "ROGUE",        hp = 0.45, role = "DAMAGER" },
     { name = "CFBuzzard4", class = "DEATHKNIGHT",  hp = 0.30, role = "TANK"    },
 }
+if BF.isForever then BF.Forever.ApplyPreviewRoster(CF_FAKE_UNIT_DEFAULTS) end -- [FOREVER] 9 Forever classes only
 
 -- FAKE UNIT DATA
 -- Defaults are used when no profile overrides exist.
@@ -150,6 +151,7 @@ local PREVIEW_UNIT_DEFAULTS = {
     { name = "Buzzardragon", class = "EVOKER",      role = "HEALER",  hp = 0.74 },
     { name = "Buzzilidan",   class = "DEMONHUNTER", role = "TANK",    hp = 0.50 },
 }
+if BF.isForever then BF.Forever.ApplyPreviewRoster(PREVIEW_UNIT_DEFAULTS) end -- [FOREVER] 9 Forever classes only
 local PREVIEW_UNIT_DEFAULTS_COUNT = #PREVIEW_UNIT_DEFAULTS
 
 -- Legacy: preserved so any out-of-tree caller that still imports
@@ -545,11 +547,16 @@ local function ApplyPreviewPowerBar(frame, isRaid, p, tier)
         if _rp_healthPower().showPowerBarHealers and unit.role == "HEALER" then showPower = true end
         if _rp_healthPower().showPowerBarBloodDK and unit.class == "DEATHKNIGHT" and unit.role == "TANK" then showPower = true end
     end
-    -- Container and health bar must be re-anchored based on power bar visibility
-    -- because preview frames have no unit, so Container:Layout always sets
-    -- effectivePowerH=0. We replicate the container offset manually here.
+    -- The content rect follows from the power bar's SHOWN flag: on a preview
+    -- frame BF.ComputeFrameContentGeometry (Container.lua) reserves the power
+    -- strip exactly when this bar is shown (owner 2026-10-12), so every
+    -- Layout -- this pass's, and every layout-only refresh after it
+    -- (BF:RefreshPreviewLayout) -- places the container, publishes
+    -- _bf_contentW/H and sizes the cast bar like a live frame. The manual
+    -- container re-anchor that used to live here is gone; see the flip
+    -- re-layout at the bottom for the one ordering case Layout cannot cover.
+    local wasShown = frame.powerBar:IsShown() and true or false
     if showPower then
-        local powerH = BF:Scale(_rp_healthPower().powerBarHeight or 4)
         -- Apply bar texture from profile
         local pbTex = _rp_healthPower().useCustomPowerBarTexture and BF:ResolveBarTexture(_rp_healthPower().powerBarTexture) or "Interface\\Buttons\\WHITE8X8"
         frame.powerBar:SetStatusBarTexture(pbTex)
@@ -571,20 +578,27 @@ local function ApplyPreviewPowerBar(frame, isRaid, p, tier)
         end
         frame.powerBar:Show()
         if frame.powerBar.bgFrame then frame.powerBar.bgFrame:Show() end
-        -- Shrink container to make room for power bar
-        if frame.container then
-            frame.container:ClearAllPoints()
-            frame.container:SetPoint("TOPLEFT",     frame, "TOPLEFT",      0, 0)
-            frame.container:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0,  powerH)
-        end
     else
         frame.powerBar:Hide()
         if frame.powerBar.bgFrame then frame.powerBar.bgFrame:Hide() end
-        -- Expand container to fill the full frame (no power bar space)
-        if frame.container then
-            frame.container:ClearAllPoints()
-            frame.container:SetPoint("TOPLEFT",     frame, "TOPLEFT",      0, 0)
-            frame.container:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0,  0)
+    end
+    -- A visibility FLIP lands after this pass's Layout already ran (every
+    -- caller lays the frame out first), so the content rect that Layout
+    -- computed is stale. Re-run the two indicators whose Layout depends on
+    -- it -- the container (anchors + _bf_contentW/H) and then the cast bar
+    -- (sized from _bf_contentH) -- in their registered order. This mirrors
+    -- the live PowerBar:Update, which re-runs Container:Layout on a flip.
+    -- Everything else anchors to the container and follows it.
+    if wasShown ~= showPower then
+        local inds = BF:GetIndicatorsEnabled()
+        if inds then
+            for i = 1, #inds do
+                local ind = inds[i]
+                if (ind.name == "container" or ind.name == "castBar")
+                   and BF:ShouldLayoutIndicator(ind, frame) then
+                    ind:Layout(frame)
+                end
+            end
         end
     end
 end
@@ -615,6 +629,12 @@ local function AdjustPreviewNameForHiddenRole(frame, p)
     local anchor = frame.container or frame.healthBar or frame
     frame.nameText:ClearAllPoints()
     frame.nameText:SetPoint(pinPoint, anchor, pinPoint, nameX, nameY)
+    -- The flag the live path sets (Indicators/RoleIcon.lua
+    -- AdjustNameForHiddenRole). NameText:Layout reads it and re-applies the
+    -- hidden-role position after re-anchoring the name; without it, any
+    -- setting that re-lays out the preview frames (an icon size or position,
+    -- a border) put this frame's name back at the icon-visible offset.
+    frame._roleIconNameAdjusted = true
 end
 
 local function ApplyPreviewRoleIcon(frame, isRaid, p, tier)
@@ -678,6 +698,13 @@ local function ApplyPreviewRoleIcon(frame, isRaid, p, tier)
         else
             tex:SetTexCoord(20/64, 39/64, 22/64, 41/64)
         end
+    end
+    -- Shown: undo a hidden-role adjustment from an earlier paint, as the live
+    -- RestoreNameForShownRole does, so the name goes back beside the icon.
+    if frame._roleIconNameAdjusted then
+        frame._roleIconNameAdjusted = nil
+        local nameInd = BF:GetIndicatorByName("nameText")
+        if nameInd then nameInd:Layout(frame) end
     end
     frame.roleIcon:Show()
 end
@@ -1078,6 +1105,92 @@ local function ApplyPreviewStatusIcons(frame, isRaid, p, tier)
     if BF.UpdateSummonPending    then BF:UpdateSummonPending(frame)    end
     if BF.UpdateResurrectPending then BF:UpdateResurrectPending(frame) end
     if BF.UpdateVehicle          then BF:UpdateVehicle(frame)          end
+end
+
+-- Test switches for the Icons tabs other than Status Icons and Role Icons
+-- (global debug flags, BF.db.global.test*, reset every reload by Core_DB).
+-- Each paints its icon on preview frames only, and only while the icon's own
+-- Show switch is on in this frame's Layout -- the same rule the Test Status
+-- Icons switches follow (Indicators/StatusIcons.lua). The real indicators'
+-- :Update never runs on a preview frame, so nothing else would show them.
+-- The generic ping's art, resolved once: the "NonThreat" kit, by NAME -- the
+-- name Grid2's StatusPing uses for it on Retail and on WoW Forever alike
+-- (Grid2 and Forever/Grid2 ship the same file). Deliberately NOT asked of
+-- C_Ping.GetTextureKitForType(Enum.PingSubjectType.AlertNotThreat): that
+-- answer depends on the client's enum, and on Forever it drew a different
+-- ping's icon (owner-reported 2026-11-17). Ping_Frame_ first -- the raid-frame
+-- receiver's own art, what the ping mirror draws -- then Grid2's other two
+-- prefixes, and only an atlas C_Texture.GetAtlasInfo confirms. Returns the
+-- pin's atlas and its Ping_Frame_BG_ background (nil where none exists).
+local PREVIEW_PING_KIT = "NonThreat"
+local _pingAtlas, _pingBG, _pingResolved
+local function PreviewPingAtlas()
+    if _pingResolved then return _pingAtlas, _pingBG end
+    _pingResolved = true
+    local GetAtlasInfo = C_Texture and C_Texture.GetAtlasInfo
+    if not GetAtlasInfo then return nil end
+    local k = PREVIEW_PING_KIT
+    if GetAtlasInfo("Ping_Frame_" .. k) then
+        _pingAtlas = "Ping_Frame_" .. k
+        if GetAtlasInfo("Ping_Frame_BG_" .. k) then _pingBG = "Ping_Frame_BG_" .. k end
+        return _pingAtlas, _pingBG
+    end
+    for _, prefix in ipairs({ "Ping_Chat_", "Ping_Wheel_Icon_" }) do
+        if GetAtlasInfo(prefix .. k) then
+            _pingAtlas = prefix .. k
+            return _pingAtlas, nil
+        end
+    end
+    return nil
+end
+
+local function ApplyPreviewIconTests(frame, isRaid, p, tier)
+    _setPreviewFlat(tier, frame)
+    local ip = _rp_icons() or {}
+    local g  = BF.db.global
+
+    -- Raid Target Marker: the skull (index 8), as RaidTargetIcon:Update draws it.
+    if frame.raidTargetIcon then
+        if g.testRaidTargetIcon and ip.showRaidTargetIcon then
+            local tex = frame.raidTargetIconTexture
+            if tex then
+                tex:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
+                tex:SetSpriteSheetCell(8, 4, 4, 64, 64)
+            end
+            frame.raidTargetIcon:Show()
+        else
+            frame.raidTargetIcon:Hide()
+        end
+    end
+
+    -- Leader / Assistant: the textures are fixed at Create.
+    if frame.leaderIcon then
+        frame.leaderIcon:SetShown((g.testLeaderIcon and ip.showLeaderIcon) and true or false)
+    end
+    if frame.assistantIcon then
+        frame.assistantIcon:SetShown((g.testAssistantIcon and ip.showAssistantIcon) and true or false)
+    end
+
+    -- Ping Indicator: the generic ping, drawn the way the ping mirror draws
+    -- one (PingMirror.lua MirrorIconFrame).
+    local pin = frame.pingIndicatorTex
+    if pin then
+        local atlas, bg = PreviewPingAtlas()
+        if atlas and g.testPingIndicator and ip.showPingIndicator then
+            pin:SetAtlas(atlas, pin.useAtlasSize)
+            if pin.Background then
+                if bg then pin.Background:SetAtlas(bg, pin.useAtlasSize)
+                else pin.Background:SetTexture(nil) end
+            end
+            pin:Show()
+        else
+            pin:Hide()
+        end
+        if pin.PostUpdate then pin:PostUpdate() end
+    end
+
+    -- Missing Raid Buff: Indicators/MissingRaidBuff.lua owns the painting.
+    if BF.PaintMissingRaidBuffPreview then BF:PaintMissingRaidBuffPreview(frame, ip) end
 end
 
 local function ApplyPreviewAbsorbOverlay(frame, isRaid, p, tier)
@@ -1599,6 +1712,7 @@ local function ApplyAllPreviewDummyData(frame, isRaid, p, tier)
     ApplyPreviewRoleIcon(frame, isRaid, p, tier)
     ApplyPreviewHighlights(frame, isRaid, p, tier)
     ApplyPreviewStatusIcons(frame, isRaid, p, tier)
+    ApplyPreviewIconTests(frame, isRaid, p, tier)
     ApplyPreviewStatus(frame, isRaid, p, tier)
     ApplyPreviewHealPrediction(frame, isRaid, p, tier)
     ApplyPreviewHealAbsorb(frame, isRaid, p, tier)
@@ -1623,6 +1737,7 @@ BF._preview.ApplyPreviewHighlights       = ApplyPreviewHighlights
 BF._preview.ApplyPreviewAggro            = ApplyPreviewAggro
 BF._preview.ApplyPreviewStatus           = ApplyPreviewStatus
 BF._preview.ApplyPreviewStatusIcons      = ApplyPreviewStatusIcons
+BF._preview.ApplyPreviewIconTests        = ApplyPreviewIconTests
 BF._preview.ApplyPreviewAbsorbOverlay    = ApplyPreviewAbsorbOverlay
 BF._preview.ApplyPreviewHealPrediction   = ApplyPreviewHealPrediction
 BF._preview.ApplyPreviewHealAbsorb       = ApplyPreviewHealAbsorb

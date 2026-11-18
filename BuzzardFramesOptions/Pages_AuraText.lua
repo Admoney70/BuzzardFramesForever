@@ -147,7 +147,7 @@ for p, s in pairs(PRIMARY_TO_SECONDARY) do SECONDARY_TO_PRIMARY[s] = p end
 -- Turning "Hide Duration Text Above 1 Minute" ON auto-disables the
 -- matching dispel-color toggle. Both dispel toggles are REMOVED from
 -- the UI (12.1 cut), but the scrub keeps cleaning stale true values out
--- of existing profiles -- copied from the Ace setter, not summarised.
+-- of existing profiles -- copied from the Ace setter, not summarized.
 local HIDE_TO_DISPEL = {
     debuffHideDurationAbove1Min = "debuffDurationDispelColor",
     globalHideDurationAbove1Min = "globalDebuffDurationDispelColor",
@@ -156,7 +156,7 @@ local HIDE_TO_DISPEL = {
 -- ── The routed write ───────────────────────────────────────────
 --
 -- The Ace setATKey, as a function of (subcat, key, value): per-Layout ON
--- lazily materialises flat.auraText.<subcat> so the write lands on the
+-- lazily materializes flat.auraText.<subcat> so the write lands on the
 -- flat's sparse rawkeys; OFF writes the always-populated global
 -- sub-table. The matching cache invalidation runs with the write, in
 -- the same order.
@@ -571,9 +571,9 @@ end
 
 -- Copy ONE SUB-CATEGORY from the Layout being modified onto another --
 -- the Ace doCopy, kept to the digit. The source is read through
--- GetSectionProfile so an un-materialised sub-category on the source
+-- GetSectionProfile so an un-materialized sub-category on the source
 -- flat falls through to the global and a pristine source still copies
--- populated values; the destination is lazily materialised with its
+-- populated values; the destination is lazily materialized with its
 -- metatable chain wired, then written rawkey by rawkey. Tables are
 -- deep-copied so the two Layouts never share one table.
 local function CopySubcatTo(subcat, targetID)
@@ -812,7 +812,7 @@ local function ScopeStrip(subcat, subtabId)
         -- where the Ace panel injects it (order 0.7, under the toggle at
         -- 0.5 and the Copy dropdown at 0.6). It belongs on this bar rather
         -- than on the page: like the toggle beside it, it decides how the
-        -- settings are ORGANISED, not what any of them are.
+        -- settings are ORGANIZED, not what any of them are.
         ModeSwitchField(subtabId),
     }}
 end

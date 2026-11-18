@@ -4,7 +4,7 @@
 -- Source: oUF `elements/healthprediction.lua`, vendored verbatim from the
 -- aurapocalypse build (8b10030, 2026-08-06). Upstream DELETED this element in
 -- oUF 14.0.0 ("healthprediction: Remove element"), folding the feature into
--- Health sub-widgets (Health.HealingAll, Health.DamageAbsorb, ... capitalised).
+-- Health sub-widgets (Health.HealingAll, Health.DamageAbsorb, ... capitalized).
 --
 -- Kept because BuzzardFrames wires `frame.HealthPrediction` in
 -- UnitFrames/oUF_Absorbs.lua; without the element that table is inert and all

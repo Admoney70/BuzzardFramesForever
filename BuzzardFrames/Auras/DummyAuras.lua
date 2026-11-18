@@ -49,8 +49,10 @@ local MAX_DEBUFFS      = BF.MAX_DEBUFFS
 BF.MAX_PREVIEW_DEBUFFS = 56
 local MAX_PREVIEW_DEBUFFS = BF.MAX_PREVIEW_DEBUFFS
 local PixelPerfectSize = BF.PixelPerfectSize
-local AnchorNudge      = BF.AnchorNudge
-local CalcAuraOffsets   = BF.CalcAuraOffsets
+-- 2026-10-12: no AnchorNudge / CalcAuraOffsets aliases any more. Every preview
+-- row now places through the shared live-flow helpers (_pvFlowLayout), which
+-- carry no legacy 1px nudge; both functions stay in AuraConfig.lua for their
+-- non-preview callers.
 local GetBackdropTable  = BF.GetBackdropTable
 local SetFrameBackdrop  = BF.SetFrameBackdrop
 local BuildAuraIconFrame = BF.BuildAuraIconFrame
@@ -708,8 +710,9 @@ local function EnsureSlotsAndBackdrop(self, frame, s)
         -- live update wiring. DummyAuras has _ShowDummyBuffs,
         -- _ShowDummyDebuffs and _ShowDummyBigDef.
         -- Each silently bails if its pool is nil. Allocate the pools
-        -- DummyAuras actually renders. NO _ShowDummyMissingRaidBuff exists
-        -- (verified by grep), so missingRaidBuffIcon is not allocated.
+        -- DummyAuras actually renders. The missing-raid-buff slots are not
+        -- DummyAuras' business: MissingRaidBuff:Create builds them on preview
+        -- frames too, and BF:PaintMissingRaidBuffPreview paints them.
         frame.buffFrames     = frame.buffFrames     or {}
         frame.debuffFrames   = frame.debuffFrames   or {}
         frame.bigDefIcons    = frame.bigDefIcons    or {}
@@ -770,14 +773,11 @@ end
 
 -- ============================================================
 -- BuildSharedState(self, frame, isRaid, raidProfile, overridePartyProfile, fakeNow, fakeDur)
--- Centralised resolution of every piece of state the _ShowDummy<Type>
+-- Centralized resolution of every piece of state the _ShowDummy<Type>
 -- helpers need. Returns a table `s` with fields:
 --   db, isRaid, activeFlat, atp,
 --   buffsP, debuffsP, bdP, diP,   -- v67: paP removed with Private Auras
 --   bSize, dSize, bdSize,
---   buffOffsets, buffAnchor, debuffAnchor,
---   debuffsPerRow, debuffGrowDir, debuffSpacing, debuffRowSpacing,
---   buffOffX, buffOffY, debuffOffX, debuffOffY,
 --   fakeNow, fakeDur,
 --   customAurasOnly, dispelDebuffBorderOnly,
 --   ApplyDummyIcon (closure),
@@ -810,29 +810,10 @@ local function BuildSharedState(self, frame, isRaid, raidProfile, overridePartyP
     local dSize  = BF:PixelRound(debuffsP.debuffSize or 12)
     local bdSize = BF:PixelRound(bdP.bigDefSize or 24)
 
-    local buffsPerRow    = buffsP.buffsPerRow        or 3
-    local debuffsPerRow  = debuffsP.debuffsPerRow    or 3
-    local buffGrowDir    = buffsP.buffGrowDirection  or "LEFT"
-    local debuffGrowDir  = debuffsP.debuffGrowDirection or "RIGHT"
-    local buffAnchor     = buffsP.buffAnchorPoint    or "BOTTOMRIGHT"
-    local debuffAnchor   = debuffsP.debuffAnchorPoint or "BOTTOMLEFT"
-    local buffOffX       = buffsP.buffOffsetX        or 0
-    local buffOffY       = buffsP.buffOffsetY        or 0
-    local debuffOffX     = debuffsP.debuffOffsetX    or 0
-    local debuffOffY     = debuffsP.debuffOffsetY    or 0
-    local buffSpacing    = buffsP.buffSpacing        or 1
-    local buffRowSpacing = buffsP.buffRowSpacing     or 1
-    local debuffSpacing    = debuffsP.debuffSpacing      or 1
-    local debuffRowSpacing = debuffsP.debuffRowSpacing   or 1
-
-    -- Offsets for this profile (same CalcAuraOffsets logic used by real auras' RebuildAuraCacheScope)
-    -- v92 §B7.1: the DEBUFF offsets table is gone. It advanced every slot by
-    -- exactly size + spacing, which cannot express the mixed-size row
-    -- _ShowDummyDebuffs builds now (enlarged boss dummy, inline container
-    -- icons at their own §B4 size). That helper runs its own cursor
-    -- accumulator over the four raw inputs exported below instead. Buffs keep
-    -- the uniform grid -- nothing there is mixed-size.
-    local buffOffsets   = CalcAuraOffsets(bSize, buffSpacing,   buffRowSpacing,   buffsPerRow,   buffGrowDir,   buffAnchor)
+    -- 2026-10-12: no offsets grids. The Buffs, Debuffs and Big Defensive rows
+    -- (and the container blocks) place through the shared live-flow helpers
+    -- (_pvHostFlow / _pvFlowLayout), from each row's live geometry -- the
+    -- CalcAuraOffsets grid carried the legacy 1px nudge and count wrapping.
 
     -- When on the Debuff Highlight subtab, only show the dispel border/overlay,
     -- not the full set of aura icons.
@@ -877,7 +858,6 @@ local function BuildSharedState(self, frame, isRaid, raidProfile, overridePartyP
         isRaid               = isRaid,
         raidProfile          = raidProfile,
         overridePartyProfile = overridePartyProfile,
-        pp                   = pp,
         activeFlat           = activeFlat,
         -- v60: the whole-table `aurasP` field was removed along with the
         -- single GetSectionProfile("auras") resolution it came from. It had
@@ -890,28 +870,10 @@ local function BuildSharedState(self, frame, isRaid, raidProfile, overridePartyP
         bSize                = bSize,
         dSize                = dSize,
         bdSize               = bdSize,
-        buffOffsets          = buffOffsets,
-        -- v94: the same four raw inputs for the BUFFS row. The uniform
-        -- buffOffsets grid above is still what an ordinary preview uses and is
-        -- unchanged; these are for the Buff List pass, where merged single
-        -- buffs make the row mixed-size and the grid cannot express it.
-        buffsPerRow          = buffsPerRow,
-        buffGrowDir          = buffGrowDir,
-        buffSpacing          = buffSpacing,
-        buffRowSpacing       = buffRowSpacing,
-        -- v92 §B7.1: the four raw inputs the retired debuffOffsets table was
-        -- baked from -- _ShowDummyDebuffs re-derives its own wrapping from
-        -- them because the row is mixed-size now.
-        debuffsPerRow        = debuffsPerRow,
-        debuffGrowDir        = debuffGrowDir,
-        debuffSpacing        = debuffSpacing,
-        debuffRowSpacing     = debuffRowSpacing,
-        buffAnchor           = buffAnchor,
-        debuffAnchor         = debuffAnchor,
-        buffOffX             = buffOffX,
-        buffOffY             = buffOffY,
-        debuffOffX           = debuffOffX,
-        debuffOffY           = debuffOffY,
+        -- 2026-10-12: the raw per-row placement inputs (per-row, grow,
+        -- spacing, anchor, offsets) are gone from the state -- every row now
+        -- places from its LIVE geometry on the frame's aura cache
+        -- (_pvHostFlow), so nothing read them.
         fakeNow              = fakeNow,
         fakeDur              = fakeDur,
         customAurasOnly      = customAurasOnly,
@@ -996,9 +958,254 @@ end
 -- ============================================================
 local _SingleBuffPreviewItems, _PaintSingleBuffDummy
 
+-- ── Duration Bar plan §5.7 (Stages 3/4): PREVIEW BARS ─────────────────────
+-- A static bar at the live bar's size and look with a fixed 60% fill (the
+-- self-positioned painter, _PaintPreviewSingleBuffBars, uses it too).
+local PREVIEW_BAR_FILL = 0.6
+-- Round 2 decision (2026-10-14): the bar's pandemic tint (and the icon's,
+-- PreviewIconEffects.lua) is NOT previewed. The engine shows it only inside
+-- the aura's refresh window, from its secret remaining duration, and only for
+-- auras that have one. This bar is drawn at 60% -- outside that window in
+-- Drain (60% left) and in Fill (40% left) -- so a tint here would show a
+-- state the live bar never reaches. Both pandemic overlays are held at
+-- alpha 0 wherever a preview bar is painted.
+
+-- Stage 4: a FLOW-HOSTED bar in a preview row. One pool per host id ("buffs",
+-- "bigDef", "bfc<ci>") per entry index, built from the SAME regions and style
+-- function as the live bar group's buttons (BF.BuildSpellBarRegions /
+-- BF.ApplySpellBarStyle), never destroyed; each row painter hides the bars
+-- of its own host it did not paint. Returns the holder, sized to the bar's
+-- own barW x barH (the live button size), for the caller to anchor exactly
+-- where the row would place an element.
+local function _pvHostBar(self, frame, hostId, it)
+    local root = frame._bf_pvHostBars
+    if not root then root = {}; frame._bf_pvHostBars = root end
+    local pool = root[hostId]
+    if not pool then pool = {}; root[hostId] = pool end
+    local r = pool[it.ci]
+    if not r then
+        local holder = CreateFrame("Frame", nil, frame)
+        -- The live bar button's level (frame +223, +1), as for sbb previews.
+        holder:SetFrameLevel(frame:GetFrameLevel() + 224)
+        r = self.BuildSpellBarRegions(holder, holder:GetFrameLevel())
+        pool[it.ci] = r
+    end
+    local bs = it.bs
+    self.ApplySpellBarStyle(r, bs)
+    r.pandemic:SetAlpha(0)
+    r.pandemicFill:SetAlpha(0)
+    r.bar:SetMinMaxValues(0, 1)
+    r.bar:SetValue(PREVIEW_BAR_FILL)
+    r.holder:SetSize(bs.w, bs.h)
+    r.holder:ClearAllPoints()
+    return r.holder
+end
+
+-- Hide the hosted bars of one host id that this pass did not paint (`keep`:
+-- set of entry indexes), or all of them. `prefix` instead of an id hides
+-- every host whose id starts with it ("bfc": the container pass owns all
+-- of those, keep[hostId][ci]).
+local function _hidePvHostBars(frame, hostId, keep, prefix)
+    local root = frame._bf_pvHostBars
+    if not root then return end
+    for hid, pool in pairs(root) do
+        local mine = prefix and (hid:sub(1, #prefix) == prefix) or (hid == hostId)
+        if mine then
+            local k = keep
+            if prefix then k = keep and keep[hid] end
+            for ci, r in pairs(pool) do
+                if not (k and k[ci]) and r.holder:IsShown() then r.holder:Hide() end
+            end
+        end
+    end
+end
+
+-- ── THE PREVIEW FLOW (owner 2026-10-12): ONE RULE FOR EVERY PREVIEW ROW ───
+-- The Buffs row, Big Defensive and a buff container's run all place their
+-- elements the way the live engine does: Blizzard's AnchorUtil.ApplyFlowLayout
+-- (plan §4.3 / §4.4), fed the SAME numbers the live geometry pass pushes.
+-- Preview only -- nothing here touches a live frame.
+--
+-- _pvHostFlow: a host's flow settings from a LIVE-SHAPED geo table (the one
+-- BuffGeneralGeo / BigDefContainerSpecs / ContainerGeo build), resolved exactly
+-- as ApplyAuraGridGeometry resolves them:
+--   grow       GROW_MAP[growDirection or "RIGHT_DOWN"] (aliases included --
+--              BF.AuraGridGrowMap is that very table)
+--   anchor     geo.anchor, "" / nil -> "CENTER"
+--   lineSize   max(1, perRow or 5) x (size or 24) + (perRow - 1) x spacing
+--              + the host's slack + one pixel of tolerance. The slack is
+--              geo.lineSizeSlack when the caller derived it (the Debuffs row:
+--              size x (shape.maxMult - 1), DebuffIcons:Layout), else the
+--              ICON-entry slack of a single-buff host (ApplyHostLineSlack: the
+--              largest anchored entry over the base, BF.MaxSingleBuffSizeFor)
+--              when `hostKey` names one, else none (a floating debuff
+--              container -- ContainerGeoDebuff stamps no slack)
+--   spacing    geo.spacing or 1 (elementSpacing, raw -- live does not round)
+--   rowSpacing geo.rowSpacing or 1 (lineSpacing)
+--   offsetX/Y  the container's own SetPoint offsets (no padding, no nudge:
+--              the live 12.1 path has neither)
+local function _pvHostFlow(geo, ac, groupTypeKey, hostKey)
+    local gm = BF.AuraGridGrowMap
+    local grow = gm and (gm[geo.growDirection or "RIGHT_DOWN"] or gm.RIGHT_DOWN)
+        or { axis = 0, h = 1, v = -1 }
+    local perRow = math.max(1, geo.perRow or 5)
+    local size = geo.size or 24
+    local spacing = geo.spacing or 1
+    local slack = geo.lineSizeSlack or 0
+    local base = geo.size
+    if geo.lineSizeSlack == nil and hostKey and base and base > 0 then
+        local m = BF.MaxSingleBuffSizeFor and BF.MaxSingleBuffSizeFor(ac, groupTypeKey, hostKey)
+        if m and m > base then slack = m - base end
+    end
+    return {
+        grow       = grow,
+        anchor     = (geo.anchor and geo.anchor ~= "") and geo.anchor or "CENTER",
+        lineSize   = perRow * size + (perRow - 1) * spacing + slack
+                     + (BF.PixelsToUI and BF:PixelsToUI(1) or 1),
+        spacing    = spacing,
+        rowSpacing = geo.rowSpacing or 1,
+        size       = size,
+        offsetX    = geo.offsetX or 0,
+        offsetY    = geo.offsetY or 0,
+    }
+end
+
+-- _pvFlowLayout: AnchorUtil.ApplyFlowLayout for ONE container, element by
+-- element, in group order (the caller hands the elements already in the live
+-- layoutIndex order). Each element `e` carries its CELL e.w x e.h (the group's
+-- elementWidth / elementHeight -- an icon's own size, a bar's
+-- BF.SpellBarFlowCell); this stamps e.ox / e.oy, its offset from the
+-- container's anchor point. The engine's steps, one to one:
+--   * primary axis = the flow axis (0 rows: x; 1 columns: y), signed by the
+--     growth direction on that axis; cross axis = the other, signed by its own
+--     growth direction;
+--   * an element WRAPS when the line already has content and line + element
+--     would exceed the max line size; the new line starts at primary 0 and
+--     moves the cross cursor by the finished line's LARGEST cross extent +
+--     lineSpacing;
+--   * after placing: cursor += element + elementSpacing, and the line's
+--     consumed size includes that trailing spacing (the engine's own
+--     bookkeeping, which is why the wrap test sees it);
+--   * no padding, groupSpacing 0, no forceNewLine (BF sets none).
+-- Elements are anchored by the container's anchor point, so mixed sizes on a
+-- line align on the anchor side.
+-- Direction signs: AnchorUtil.FlowDirection is Left = -1, Right = 1, Up = 1,
+-- Down = -1 (Blizzard AnchorUtil.lua:471-477, confirmed 2026-10-12), and BF
+-- hands GROW_MAP's h / v straight to SetFlowLayoutGrowthDirection
+-- (ApplyAuraGridGeometry, ContainerFactory.lua ~3484) -- so they are applied
+-- here as plain offset signs (x right, y up).
+local function _pvFlowLayout(elems, f)
+    local vertical = (f.grow.axis == 1)
+    local pDir = vertical and f.grow.v or f.grow.h
+    local cDir = vertical and f.grow.h or f.grow.v
+    local maxLine, spacing, lineGap = f.lineSize, f.spacing, f.rowSpacing
+    local curP, curC, lineP, lineC = 0, 0, 0, 0
+    for i = 1, #elems do
+        local e = elems[i]
+        local ep = vertical and e.h or e.w
+        local ec = vertical and e.w or e.h
+        local nextP = (lineP > 0) and (lineP + ep) or ep
+        if lineP > 0 and nextP > maxLine then
+            curP = 0
+            curC = curC + (lineC + lineGap) * cDir
+            lineP, lineC = 0, 0
+            nextP = ep
+        end
+        e.ox = vertical and curC or curP
+        e.oy = vertical and curP or curC
+        curP  = curP + (ep + spacing) * pDir
+        lineP = nextP + spacing
+        if ec > lineC then lineC = ec end
+    end
+end
+
+-- Anchor one placed element the way the live container + engine do: the
+-- container sits at (anchor, target, anchor, offsetX, offsetY) -- target is the
+-- aurasAbovePowerBar lift (BF.AuraLiftAnchorFrame) or the frame -- and the
+-- element at (anchor, container, anchor, ox, oy). Same point on both, so the
+-- element lands at offset + (ox, oy) from the target.
+local function _pvPlace(region, f, target, e)
+    region:ClearAllPoints()
+    region:SetPoint(f.anchor, target, f.anchor, f.offsetX + e.ox, f.offsetY + e.oy)
+end
+
+-- The lift target for a host's flow, exactly as ApplyAuraGridGeometry picks it
+-- (every one of these hosts has canLift).
+local function _pvFlowTarget(self, frame, ac, f)
+    return (self.AuraLiftAnchorFrame and self.AuraLiftAnchorFrame(frame, ac, f.anchor)) or frame
+end
+
+-- Duration Bar Stage 5 (plan §5.6): the frame's STATIC PUSH, computed once per
+-- row pass by the live function (BF.ComputeSingleBuffBarPush) and applied as
+-- the live anchor paths apply it (BF.SingleBuffBarPushFor: same edge rule,
+-- same per-target space). On a preview frame it is fed exactly the
+-- self-positioned bars the preview DRAWS (the Buff List set's bars), so a row
+-- is pushed by what is on screen; a setup-mode test frame is a real frame and
+-- uses the live terms (items nil).
+local function _pvComputePush(self, frame, ac, groupTypeKey)
+    if not BF.ComputeSingleBuffBarPush then return end
+    local items
+    if frame._isPreviewFrame then
+        local set = _SingleBuffPreviewItems(self, frame, ac, groupTypeKey)
+        items = (set and set.bars) or {}
+    end
+    BF.ComputeSingleBuffBarPush(frame, groupTypeKey, items)
+end
+
+-- Fold the computed push into a host flow's container offsets.
+local function _pvApplyPush(frame, f, target)
+    if not BF.SingleBuffBarPushFor then return end
+    local dx, dy = BF.SingleBuffBarPushFor(frame, f.anchor, target)
+    f.offsetX, f.offsetY = f.offsetX + dx, f.offsetY + dy
+end
+
+-- An entry's icon CELL in a host, as the live emit sizes its group: a
+-- customized entry keeps its own resolved size (base x eSize/base = eSize), a
+-- "Show (Default Buff)" entry and an entry SHARING the host's group (band 2)
+-- draw at the host's base size.
+--
+-- Display-tab redesign: an uncustomized entry in "text" mode has a size of
+-- its own (Text Area Size no longer needs Customize Buff) -- the live emit's
+-- rule (EmitSingleBuffHostGroups).
+local function _pvEntryCell(self, it, groupTypeKey, ac, baseSize)
+    if it.band == 2 then return baseSize end
+    if it.c.singleBuffCustomized == false
+       and not (self.GetSingleBuffIconMode
+                and self.GetSingleBuffIconMode(it.c, groupTypeKey, ac) == "text") then
+        return baseSize
+    end
+    local eSize = self:ResolveContainerGeometry(it.c, groupTypeKey, ac)
+    return (eSize and eSize > 0) and eSize or baseSize
+end
+
+-- Stage 4 collection helper: the hosted-bar ITEM for an entry whose bar's
+-- Anchor Point is a flow host, and the bucket it lands in ("buffs",
+-- "bigDef", or the host container's index), or nil. Banded around the icon
+-- bands exactly as the live emit orders it: Before bars (band 0) ahead of the
+-- Before icons (1), After bars (4) behind the After icons (3).
+local function _pvHostedBarItem(self, frame, c, ci, sid, bset, bentry)
+    local bs = self.ResolveSpellBarSpec and self.ResolveSpellBarSpec(frame, bset, bentry)
+    if not (bs and bs.flow and bs.w and bs.h) then return nil end
+    local h = self.GetFlowHostForValue and self:GetFlowHostForValue(bs.anchor)
+    if not h then return nil end
+    local bucket
+    if h.kind == "buffs" then bucket = "buffs"
+    elseif h.kind == "bigDef" then bucket = "bigDef"
+    elseif h.kind == "bfc" then bucket = h.ci end
+    if bucket == nil then return nil end
+    local ord = self:GetSingleBuffOrder(c)
+    return {
+        c = c, ci = ci, sid = sid, key = c.singleBuffKey, sel = false,
+        bar = true, bs = bs,
+        band = bs.after and 4 or 0,
+        -- The live emit's Order (None = 99, CollectSingleBuffFlow).
+        order = ord or 99,
+    }, bucket
+end
+
 local function _ShowDummyBuffs(self, frame, s)
     if not frame.buffFrames then return end
-    local db, buffsP = s.db, s.buffsP
+    local buffsP = s.buffsP
     local showBuffs = buffsP.showBuffs ~= false
     if s.dispelDebuffBorderOnly or s.customAurasOnly then showBuffs = false end
     -- v70: preview frames gate on the active Preview dropdown (Buffs side);
@@ -1016,6 +1223,7 @@ local function _ShowDummyBuffs(self, frame, s)
         for i = 1, MAX_BUFFS do
             local icon = frame.buffFrames[i]; if icon and icon:IsShown() then icon:Hide() end
         end
+        _hidePvHostBars(frame, "buffs")
         return
     end
     local ac            = BF:GetAuraCacheForFrame(frame)
@@ -1045,8 +1253,6 @@ local function _ShowDummyBuffs(self, frame, s)
     -- in the aura indicator.
     local bR, bG, bB, bA = BF.GetDefaultBorderColorFor("buff", ac)
     local ApplyDummyIcon = s.ApplyDummyIcon
-    local buffAnchor, buffOffX, buffOffY = s.buffAnchor, s.buffOffX, s.buffOffY
-    local buffOffsets = s.buffOffsets
 
     -- ── v94: BUFF LIST MERGE ──────────────────────────────────────────────
     -- Buffs-anchored single buffs flow in THIS row (matrix rows 1-2, 4-5), so
@@ -1071,91 +1277,72 @@ local function _ShowDummyBuffs(self, frame, s)
     -- Spec = All with no selection). The uniform grid below then runs
     -- unchanged, so the pane still shows the ordinary buff row -- its size,
     -- spacing and position -- exactly as every other subtab does.
-    if sbSet then
-        -- MIXED-SIZE CURSOR. The uniform offsets grid advances every slot by
-        -- exactly size + spacing, which cannot express a single buff drawn at
-        -- its own size. Accumulate each icon's OWN extent along the grow axis
-        -- instead, wrap by Icons Per Row, and step the cross axis by the
-        -- completed row's tallest icon -- the preview twin of the live row's
-        -- lineSizeSlack semantics, and the same cursor _ShowDummyDebuffs runs.
-        local perRow = s.buffsPerRow or 3
-        if perRow < 1 then perRow = 1 end
-        local spacing = BF:PixelRound(s.buffSpacing or 1)
-        local rowSp   = BF:PixelRound(s.buffRowSpacing or 1)
-        local dir = (BF.NormalizeGrowDirection
-            and BF.NormalizeGrowDirection(s.buffGrowDir or "LEFT", buffAnchor)) or "LEFT_DOWN"
-        local prim, sec = dir:match("^(%u+)_(%u+)$")
-        if not prim then prim, sec = "LEFT", "DOWN" end
-        local pvx = (prim == "RIGHT" and 1) or (prim == "LEFT" and -1) or 0
-        local pvy = (prim == "UP"    and 1) or (prim == "DOWN" and -1) or 0
-        local wvx = (sec  == "RIGHT" and 1) or (sec  == "LEFT" and -1) or 0
-        local wvy = (sec  == "UP"    and 1) or (sec  == "DOWN" and -1) or 0
-        local nx, ny = AnchorNudge(buffAnchor)
-        local anchorParent = frame
-        if db.aurasAbovePowerBar and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
-           and (buffAnchor == "BOTTOM" or buffAnchor == "BOTTOMLEFT" or buffAnchor == "BOTTOMRIGHT") then
-            anchorParent = frame.healthBar
-        end
+    -- ── THE ROW'S FLOW (owner 2026-10-12): the live engine's placement ──────
+    -- The host settings the live geometry pass pushes for this row
+    -- (BuffGeneralGeo -> ApplyAuraGridGeometry), read from this preview frame's
+    -- own aura cache -- the previewed Layout's -- and laid out by the shared
+    -- preview flow (_pvFlowLayout, the AnchorUtil.ApplyFlowLayout mirror). Both
+    -- arms below use it: the entry set and the plain dummies.
+    local f = _pvHostFlow({
+        size          = ac._roundedBuffSize or 12,
+        anchor        = ac.buffAnchor or "BOTTOMRIGHT",
+        offsetX       = ac.buffOffsetX,
+        offsetY       = ac.buffOffsetY,
+        growDirection = ac.buffGrowDir or "LEFT",
+        perRow        = ac.buffsPerRow,
+        spacing       = ac.buffSpacing,
+        rowSpacing    = ac.buffRowSpacing,
+    }, ac, groupTypeKey, "buffs")
+    local target = _pvFlowTarget(self, frame, ac, f)
+    _pvComputePush(self, frame, ac, groupTypeKey)
+    _pvApplyPush(frame, f, target)
 
-        -- The row: Before band, then After band. Band 2 -- the host's own
-        -- content, i.e. the generic dummies -- is deliberately EMPTY here (see
-        -- the ruling above), so the two bands sit next to each other. The
-        -- entries are already sorted within each band by _SBItemLess, so this
-        -- is a straight partition. Truncated to the pool rather than grown --
-        -- the pool is already sized for the live maximum.
-        local seq, nSeq = {}, 0
+    if sbSet then
+        -- The entry set in the live group order: Before bars (band 0), Before
+        -- icons (1), entries sharing `main` (2), After icons (3), After bars
+        -- (4); Order then container index within a band (_SBItemLess). Each
+        -- element's cell is what its live group spaces by: an icon at its own
+        -- size (_pvEntryCell), a bar by BF.SpellBarFlowCell. Band 2 -- the
+        -- host's own content, i.e. the generic dummies -- holds only the shared
+        -- entries here (owner ruling: the set replaces the dummies).
+        local elems, slot, barKeep = {}, 0, nil
         if sbItems then
             for i = 1, #sbItems do
-                if sbItems[i].band == 1 then nSeq = nSeq + 1; seq[nSeq] = sbItems[i] end
-            end
-            for i = 1, #sbItems do
-                if sbItems[i].band ~= 1 then nSeq = nSeq + 1; seq[nSeq] = sbItems[i] end
-            end
-        end
-        if nSeq > MAX_BUFFS then nSeq = MAX_BUFFS end
-
-        local primC, secC, rowMax, col = 0, 0, 0, 0
-        local slot = 0
-        for i = 1, nSeq do
-            local it = seq[i]
-            if col >= perRow then
-                secC = secC + rowMax + rowSp
-                primC, rowMax, col = 0, 0, 0
-            end
-            -- Every element of `seq` is an entry now (band 2 is empty), so
-            -- there is no base-dummy arm below any more.
-            local isz = BF:PixelRound(
-                self:ResolveContainerGeometry(it.c, groupTypeKey, ac, nil) or bSize)
-            local px = (primC * pvx) + (secC * wvx) + buffOffX + nx
-            local py = (primC * pvy) + (secC * wvy) + buffOffY + ny
-            local icon = frame.buffFrames[slot + 1]
-            local painted = false
-            if icon then
-                painted = _PaintSingleBuffDummy(self, frame, icon, it, isz, ac,
-                    groupTypeKey, ApplyDummyIcon, bR, bG, bB, bA,
-                    "Setup Mode: " .. (it.c.name or tostring(it.sid)))
-                if painted then
-                    slot = slot + 1
-                    icon:ClearAllPoints()
-                    icon:SetPoint(buffAnchor, anchorParent, buffAnchor, px, py)
-                    icon.SF_LastIndex = slot
-                else
-                    -- Unresolvable icon texture (no art for the spell ID). The
-                    -- slot is NOT consumed and the cursor does NOT advance, so
-                    -- the next entry takes this position -- an entry that
-                    -- cannot draw must not leave a hole in the flow. Cleared
-                    -- because the trailing sweep starts past `slot` and would
-                    -- otherwise skip an icon this pass left shown.
-                    if BF.ClearPreviewIconEffectFx then BF.ClearPreviewIconEffectFx(icon) end
-                    icon:Hide()
+                local it = sbItems[i]
+                if it.bar then
+                    local cw, ch = BF.SpellBarFlowCell(it.bs, f.grow.axis, f.lineSize)
+                    if cw then
+                        elems[#elems + 1] = { w = cw, h = ch, bar = true,
+                            region = _pvHostBar(self, frame, "buffs", it) }
+                        barKeep = barKeep or {}
+                        barKeep[it.ci] = true
+                    end
+                elseif slot < MAX_BUFFS then
+                    local cell = _pvEntryCell(self, it, groupTypeKey, ac, f.size)
+                    local icon = frame.buffFrames[slot + 1]
+                    if icon and _PaintSingleBuffDummy(self, frame, icon, it, cell, ac,
+                            groupTypeKey, ApplyDummyIcon, bR, bG, bB, bA,
+                            "Setup Mode: " .. (it.c.name or tostring(it.sid))) then
+                        slot = slot + 1
+                        icon.SF_LastIndex = slot
+                        elems[#elems + 1] = { w = cell, h = cell, region = icon }
+                    elseif icon then
+                        -- Unresolvable icon texture (no art for the spell ID):
+                        -- no element, so the next entry takes this place -- an
+                        -- entry that cannot draw must not leave a hole.
+                        if BF.ClearPreviewIconEffectFx then BF.ClearPreviewIconEffectFx(icon) end
+                        icon:Hide()
+                    end
                 end
             end
-            if painted then
-                primC = primC + isz + spacing
-                if isz > rowMax then rowMax = isz end
-                col = col + 1
-            end
         end
+        _pvFlowLayout(elems, f)
+        for i = 1, #elems do
+            local e = elems[i]
+            _pvPlace(e.region, f, target, e)
+            if e.bar then e.region:Show() end
+        end
+        _hidePvHostBars(frame, "buffs", barKeep)
         for idx = slot + 1, MAX_BUFFS do
             local icon = frame.buffFrames[idx]
             if icon and icon:IsShown() then
@@ -1165,8 +1352,12 @@ local function _ShowDummyBuffs(self, frame, s)
         end
         return
     end
-    -- ── end BUFF LIST MERGE; the uniform grid below is unchanged ──────────
+    -- ── end BUFF LIST MERGE ───────────────────────────────────────────────
+    _hidePvHostBars(frame, "buffs")
 
+    -- The plain dummies: `main`'s content, every cell the row's base size,
+    -- through the same flow.
+    local dummies = {}
     for idx = 1, numToShow do
         local icon = frame.buffFrames[idx]
         if icon then
@@ -1177,21 +1368,14 @@ local function _ShowDummyBuffs(self, frame, s)
             -- the merge bucket and drops the row straight back onto this path,
             -- with no PreviewIconEffects_ClearAll in between.
             if BF.ClearPreviewIconEffectFx then BF.ClearPreviewIconEffectFx(icon) end
-            icon:ClearAllPoints()
-            local off = buffOffsets[idx]
-            if off then
-                local anchorParent = frame
-                -- BOTTOM-anchor gate: lifting above the power bar only makes
-                -- sense when icons grow from the bottom edge of the health bar.
-                if db.aurasAbovePowerBar and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
-                   and (buffAnchor == "BOTTOM" or buffAnchor == "BOTTOMLEFT" or buffAnchor == "BOTTOMRIGHT") then
-                    anchorParent = frame.healthBar
-                end
-                icon:SetPoint(buffAnchor, anchorParent, buffAnchor, off.x + buffOffX, off.y + buffOffY)
-            end
             SetDummyTooltip(icon, "Setup Mode: Buffs")
             icon.SF_LastIndex = idx
+            dummies[#dummies + 1] = { w = f.size, h = f.size, region = icon }
         end
+    end
+    _pvFlowLayout(dummies, f)
+    for i = 1, #dummies do
+        _pvPlace(dummies[i].region, f, target, dummies[i])
     end
     for idx = numToShow + 1, MAX_BUFFS do
         local icon = frame.buffFrames[idx]
@@ -1250,7 +1434,8 @@ local _paintPreviewContainerIcon, _debuffPresetPreviewList
 local function _SBItemLess(a, b)
     if a.band  ~= b.band  then return a.band  < b.band  end
     if a.order ~= b.order then return a.order < b.order end
-    return a.key < b.key
+    -- The live tiebreak (SingleBuffFlowLess): container index, stable too.
+    return a.ci < b.ci
 end
 
 -- Collect the single buffs this preview pass should draw, bucketed by anchor
@@ -1328,17 +1513,52 @@ _SingleBuffPreviewItems = function(self, frame, ac, groupTypeKey)
         -- Pseudo entries (a Buff List row hosting a feature's settings) report
         -- no spell to the aura engine on purpose, so there is nothing to draw.
         local sid = take and self.GetSingleBuffSpellID and self:GetSingleBuffSpellID(c) or nil
+        -- Duration Bar plan §5.5 (Stage 3): the entry's BAR previews whatever
+        -- its icon does (a bar-only entry has no icon at all), so it is
+        -- collected BEFORE the icon-mode exclusion below. Self-positioned
+        -- only -- _PaintPreviewSingleBuffBars resolves the spec and skips a
+        -- flow-anchored bar (Stage 4).
+        if take and sid and self.GetSpellBar then
+            local bset, bentry = self.GetSpellBar(sid, groupTypeKey, c)
+            if bset then
+                out = out or { buffs = {}, bigDef = {}, floating = {}, byCI = {}, bars = {} }
+                out.bars[#out.bars + 1] = { c = c, ci = ci, sid = sid }
+                -- Stage 4: a FLOW-HOSTED bar also joins its host's row bucket,
+                -- in the live band order (see _pvHostedBarItem).
+                local bItem, bBucket = _pvHostedBarItem(self, frame, c, ci, sid, bset, bentry)
+                if bItem then
+                    local blist
+                    if type(bBucket) == "number" then
+                        blist = out.byCI[bBucket]
+                        if not blist then blist = {}; out.byCI[bBucket] = blist end
+                    else
+                        blist = out[bBucket]
+                    end
+                    blist[#blist + 1] = bItem
+                    n = n + 1
+                end
+            end
+        end
+        -- Show Icon OFF with nothing drawn in its place (Duration Bar plan
+        -- §5.1; per Layout, see BF.GetSingleBuffIconMode): live, the entry
+        -- builds no slot or group and takes no space, so it
+        -- is not part of the preview set either -- left in, it would still
+        -- count against the row's slot cap.
+        if sid and self.GetSingleBuffIconMode
+           and self.GetSingleBuffIconMode(c, groupTypeKey, ac) == "none" then
+            sid = nil
+        end
         if take and sid then
             local rel  = self:GetSingleBuffRelativeOrder(c, groupTypeKey)
             local ord  = self:GetSingleBuffOrder(c)
             local item = {
                 c = c, ci = ci, sid = sid, key = c.singleBuffKey,
                 sel = (c.singleBuffKey == selKey),
-                -- Band 1 = Before, 3 = After. The host's own content is band 2,
-                -- which no single buff occupies -- it is what they straddle.
+                -- Band 1 = Before, 3 = After. The host's own content is band 2;
+                -- an entry that SHARES the host's group joins it (below).
                 band = (rel == "AFTER") and 3 or 1,
-                -- No Order sorts last within its band.
-                order = ord or math.huge,
+                -- The live emit's Order: None = 99 (CollectSingleBuffFlow).
+                order = ord or 99,
             }
             -- The anchor decides the bucket. Resolved through the SAME helper
             -- the live path uses -- never by reading c.anchorPoint here, which
@@ -1350,11 +1570,17 @@ _SingleBuffPreviewItems = function(self, frame, ac, groupTypeKey)
                 if host.kind == "buffs" then bucket = "buffs"
                 elseif host.kind == "bigDef" then bucket = "bigDef"
                 elseif host.kind == "bfc" then bucket = host.ci end
+                -- Live, an entry carrying nothing per-entry renders INSIDE the
+                -- host's own group (layoutIndex 1000), not in an sb band.
+                if self.SingleBuffSharesHostGroup and self.SingleBuffSharesHostGroup(c,
+                        host.kind, host.kind == "bfc" and all[host.ci] or nil) then
+                    item.band = 2
+                end
             end
             -- No flow host = a real frame point: the entry floats at its own
             -- configured position and gets an icon of its own.
             if bucket == nil then bucket = "floating" end
-            out = out or { buffs = {}, bigDef = {}, floating = {}, byCI = {} }
+            out = out or { buffs = {}, bigDef = {}, floating = {}, byCI = {}, bars = {} }
             local list
             if type(bucket) == "number" then
                 list = out.byCI[bucket]
@@ -1411,6 +1637,25 @@ local function _ContainerTabPreviewItems(self, frame, ac, groupTypeKey)
         local take = c and c.singleBuff and type(c.singleBuffKey) == "string"
             and not c.singleBuffHidden and c.enabled ~= false
         local sid = take and self.GetSingleBuffSpellID and self:GetSingleBuffSpellID(c) or nil
+        -- Stage 4: a bar hosted in THIS container previews in its run too.
+        if sid and self.GetSpellBar then
+            local bset, bentry = self.GetSpellBar(sid, groupTypeKey, c)
+            local bItem, bBucket
+            if bset then
+                bItem, bBucket = _pvHostedBarItem(self, frame, c, ci, sid, bset, bentry)
+            end
+            if bItem and bBucket == cmCI then
+                bItem.specMet = self:IsSingleBuffSpecMet(c) and 0 or 1
+                list = list or {}
+                list[#list + 1] = bItem
+            end
+        end
+        -- Same exclusion as _SingleBuffPreviewItems (plan §5.1): an entry
+        -- with no icon and no text in its place takes no place, nor a cap slot.
+        if sid and self.GetSingleBuffIconMode
+           and self.GetSingleBuffIconMode(c, groupTypeKey, ac) == "none" then
+            sid = nil
+        end
         if take and sid then
             -- The SAME resolver the live path uses, so the per-Layout tier
             -- of the anchor is honored; the descriptor is interned, so its
@@ -1420,11 +1665,15 @@ local function _ContainerTabPreviewItems(self, frame, ac, groupTypeKey)
                 local rel = self:GetSingleBuffRelativeOrder(c, groupTypeKey)
                 local ord = self:GetSingleBuffOrder(c)
                 list = list or {}
+                local shares = self.SingleBuffSharesHostGroup
+                    and self.SingleBuffSharesHostGroup(c, "bfc", host)
                 list[#list + 1] = {
                     c = c, ci = ci, sid = sid, key = c.singleBuffKey,
                     sel = false,
-                    band  = (rel == "AFTER") and 3 or 1,
-                    order = ord or math.huge,
+                    -- Live bands (see _SingleBuffPreviewItems): 2 = shares
+                    -- the host's own group.
+                    band  = shares and 2 or ((rel == "AFTER") and 3 or 1),
+                    order = ord or 99,
                     -- The current spec's entries come first.
                     specMet = self:IsSingleBuffSpecMet(c) and 0 or 1,
                 }
@@ -1439,7 +1688,7 @@ local function _ContainerTabPreviewItems(self, frame, ac, groupTypeKey)
     for i = #list, CONTAINER_PREVIEW_MAX + 1, -1 do list[i] = nil end
     -- Back in the row's own sequence for the run that survived the cap.
     table.sort(list, _SBItemLess)
-    return { buffs = {}, bigDef = {}, floating = {}, byCI = { [cmCI] = list } }
+    return { buffs = {}, bigDef = {}, floating = {}, byCI = { [cmCI] = list }, bars = {} }
 end
 
 -- Paint ONE single-buff entry onto a preview icon at the given size.
@@ -1452,9 +1701,11 @@ end
 -- the BF:ResolveContainer* family -- and NOT a second interpretation of the
 -- settings.
 --
--- An entry in "Show (Default Buff)" mode needs no branch: SBRoot returns nil
--- for it, so every resolver below yields nil and the row's own defaults apply,
--- which is exactly what that mode does in game.
+-- An entry in "Show (Default Buff)" mode needs no branch: every ICON resolver
+-- below yields nil for it and the row's own defaults apply, which is exactly
+-- what that mode does in game. Since the Display-tab redesign its Show Icon /
+-- Text in place (and, in "text" mode, its Cooldown Text) are read for it too
+-- -- the getters apply that gating (GetSingleBuffVisualEntry), not this code.
 _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey,
                                 ApplyDummyIcon, defR, defG, defB, defA, tooltip)
     local c, sid = item.c, item.sid
@@ -1466,6 +1717,24 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     local ity = self.GetSpellIconType and self.GetSpellIconType(sid, c)
     local legacyBordered = (ity == "BorderedSquare")
     if legacyBordered or ity == "SquareDuration" then ity = "Square" end
+    -- SHOW ICON (Duration Bar plan §5.1-5.2), the three states the live spec
+    -- derivation has (DeriveSpellButtonSpec):
+    --   icon shown -> everything below, unchanged;
+    --   "text"     -> the icon region draws nothing (alpha 0), no border, no
+    --                 swipe, no icon effects -- only the duration text, at the
+    --                 Text Area Size the caller resolved as `size`;
+    --   "none"     -> nothing at all, and no place in the flow (also a text
+    --                 entry whose duration text and stack count both resolve
+    --                 off). The
+    --                 collectors already leave these out; this is the backstop
+    --                 (false = "not painted", which every caller handles by
+    --                 not consuming the slot).
+    -- With the icon off the Square type is ignored, threshold mode included.
+    local iconMode = self.GetSingleBuffIconMode
+        and self.GetSingleBuffIconMode(c, groupTypeKey, ac)
+    if iconMode == "none" then return false end
+    local textOnly = (iconMode == "text")
+    if textOnly then ity, legacyBordered = nil, false end
     local isSquare = (ity == "Square")
 
     local solid = self.GetSolidIconColor and self.GetSolidIconColor(sid, c)
@@ -1484,8 +1753,9 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     local squareEntry = solid or { r = 0, g = 0.7, b = 1, a = 1 }
     local durationSquare = isSquare and squareEntry.thresholdEnabled and true or false
     local tex
-    if isSquare then
-        -- The Square type draws a flat fill, not the spell art.
+    if isSquare or textOnly then
+        -- The Square type draws a flat fill, not the spell art. Text-only
+        -- takes the same flat texture and alpha-0s it after the paint.
         tex = "Interface\\Buttons\\WHITE8x8"
     else
         tex = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid)
@@ -1523,6 +1793,8 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
             bA = perSpellColor.a or bA
         end
     end
+    -- Text-only: no border -- the live spec's flat-at-thickness-0 shape.
+    if textOnly then bStyle, bThick = "flat", 0 end
 
     -- ── COOLDOWN TEXT ─────────────────────────────────────────────────────
     -- Through the shared per-spell resolver, which already takes sbC. Field
@@ -1542,6 +1814,13 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     local dCurve       = ac.expiringCurveBuff
     local ct = self.ResolveSpellCooldownText
         and self.ResolveSpellCooldownText(sid, groupTypeKey, ac, c)
+    -- Header-fix round, item 5: an uncustomized entry's stand-in text in a
+    -- buff container wears that container's duration style when it has no
+    -- override of its own -- the live emit's rule (BF.SingleBuffTextHostDuration
+    -- is the same resolution ApplyContainerDuration stamps). Same field names.
+    if not ct and textOnly and self.SingleBuffTextHostDuration then
+        ct = self.SingleBuffTextHostDuration(c, groupTypeKey, ac)
+    end
     if ct then
         showDuration, autoScale = ct.showDur, ct.autoScale
         dFont, dFontSize = ct.durationFont, ct.fontSize or 11
@@ -1551,6 +1830,9 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     end
     local bfSize  = autoScale and 11 or dFontSize
     local bfScale = autoScale and (size / 12 * (dTimerScale or 1.0)) or 1.0
+    -- Text-only: no swipe or spark (no icon for the wedge to cover). The text
+    -- keeps the resolved Cooldown Text style above.
+    if textOnly then dSwipe, dSpark = true, true end
 
     -- ── SQUARE (COLOR BY DURATION) ────────────────────────────────────────
     -- Reproduced, not approximated. The live path draws this square as the
@@ -1617,6 +1899,14 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
         if sq < 1 then sq = 1 end
         squareScale = sq / (BF.SQUARE_GLYPH_FONT_BASE or 12)
         bfScale = squareScale
+    end
+
+    -- Display-tab redesign: Show Cooldown Text OFF -- the live rule
+    -- (DeriveSpellButtonSpec): no duration text on a customized icon, never
+    -- on the text stand-in or the Square colored by remaining time.
+    if not textOnly and not durationSquare and self.GetSpellCooldownTextOff
+       and self.GetSpellCooldownTextOff(sid, c) then
+        showDuration = false
     end
 
     ApplyDummyIcon(icon, tex, bR, bG, bB, size, showDuration,
@@ -1689,6 +1979,13 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     else
         -- ApplyDummyIcon has already reset the region to opaque white, so only
         -- the static Square's own fill needs painting here.
+        if textOnly and icon.Icon then
+            -- Text in place of the icon: the icon region shows nothing (the
+            -- live path's alpha-0 solidIcon). ApplyDummyIcon resets the alpha
+            -- on every paint, so a pooled slot reused by another entry is
+            -- not left invisible.
+            icon.Icon:SetAlpha(0)
+        end
         if isSquare and icon.Icon then
             -- v94: ALPHA included. It was dropped by a three-argument
             -- SetVertexColor, so an Icon Color set fully or partly transparent
@@ -1705,7 +2002,9 @@ _PaintSingleBuffDummy = function(self, frame, icon, item, size, ac, groupTypeKey
     -- ICON EFFECTS. The painting half already exists and is already shared
     -- with the container preview (BF.PaintPreviewIconEffectFx); only the
     -- CONFIG lookup differs, and GetSpellIconEffect already takes sbC.
-    local ie = self.GetSpellIconEffect and self.GetSpellIconEffect(sid, c)
+    -- (None with the icon off: the effects are the icon's, plan §5.1.)
+    local ie = (not textOnly) and self.GetSpellIconEffect
+        and self.GetSpellIconEffect(sid, c) or nil
     if ie and ie.enabled ~= false then
         if self.PaintPreviewIconEffectFxTracked then
             self.PaintPreviewIconEffectFxTracked(icon, ie)
@@ -1779,7 +2078,7 @@ end
 
 local function _ShowDummyDebuffs(self, frame, s)
     if not frame.debuffFrames then return end
-    local db, debuffsP = s.db, s.debuffsP
+    local debuffsP = s.debuffsP
     local showDebuffs = debuffsP.showDebuffs ~= false
     if s.dispelDebuffBorderOnly or s.customAurasOnly then showDebuffs = false end
     -- v70: preview frames gate on the active Preview dropdown (Debuffs side);
@@ -1800,7 +2099,6 @@ local function _ShowDummyDebuffs(self, frame, s)
         return
     end
     local ac            = BF:GetAuraCacheForFrame(frame)
-    local dSize         = s.dSize
     local showDuration  = ac.showDebuffDuration
     local swipeDisabled = ac.disableDebuffSwipe or false
     local sparkDisabled = ac.disableDebuffSpark or false
@@ -1906,6 +2204,31 @@ local function _ShowDummyDebuffs(self, frame, s)
     -- differently here than on a real frame. Its `entries` already carry
     -- exactly what an item needs (id, live, rank, sub, mult) in the order
     -- ShapeEntryLess resolved.
+    -- 2026-10-12: the LIVE shape, resolved in both modes (ResolveDebuffShape
+    -- covers Simple Mode too). Its entries carry e.li -- the dense layoutIndex
+    -- DebuffIcons:Layout gives every type group and every flowed preset group
+    -- (ShapeEntryLess order) -- which IS the live group order of this row, and
+    -- its maxMult is the live wrap slack (size x (maxMult - 1)).
+    local liveShape
+    if BF._ResolveDebuffShape then
+        local flowSetN, flowSigN
+        if flowClaims and BF._ComputeDebuffFlowSet then
+            flowSetN, flowSigN = BF._ComputeDebuffFlowSet(ac, groupTypeKey, flowClaims, pairOwn)
+        end
+        liveShape = BF._ResolveDebuffShape(frame, ac, claimSuffix, claims,
+                                           flowSetN, flowSigN)
+    end
+    local liById, liFlow = {}, {}
+    if liveShape and liveShape.order then
+        for i = 1, #liveShape.order do
+            local e = liveShape.order[i]
+            if e.flowed then
+                liFlow[tostring(e.ci) .. ":" .. tostring(e.pkey)] = e.li
+            else
+                liById[e.id] = e.li
+            end
+        end
+    end
     local groups, nGroups = {}, 0
     local simpleShape = ac.debuffSimpleMode == true
     -- `sub` is the shape's own rank tiebreak (0/1) -- it is what keeps a
@@ -1920,6 +2243,7 @@ local function _ShowDummyDebuffs(self, frame, s)
         nGroups = nGroups + 1
         groups[nGroups] = {
             id = id, n = n, rank = rank, mult = mult, sub = sub or 0,
+            li = liById[id],
             label = (simpleShape and DUMMY_GROUP_LABEL_SIMPLE[id])
                 or DUMMY_GROUP_LABEL[id] or "Debuffs",
         }
@@ -1933,14 +2257,8 @@ local function _ShowDummyDebuffs(self, frame, s)
             local r = rows[i]
             addGroup(r.id, true, r.rank, r.mult)
         end
-    elseif BF._ResolveDebuffShape then
-        local flowSetN, flowSigN
-        if flowClaims and BF._ComputeDebuffFlowSet then
-            flowSetN, flowSigN = BF._ComputeDebuffFlowSet(ac, groupTypeKey, flowClaims, pairOwn)
-        end
-        local shape = BF._ResolveDebuffShape(frame, ac, claimSuffix, claims,
-                                             flowSetN, flowSigN)
-        local order = shape and shape.order
+    elseif liveShape then
+        local order = liveShape.order
         for i = 1, (order and #order or 0) do
             local e = order[i]
             -- FLOWED entries are the inline container pass's business below --
@@ -1983,6 +2301,7 @@ local function _ShowDummyDebuffs(self, frame, s)
             nItems = nItems + 1
             items[nItems] = {
                 rec = rec, rank = g.rank, sub = g.sub, seq = seq, mult = g.mult,
+                li = g.li,
                 label = g.label,
                 dispellable = (typed and rec.dispellable and simDispel) and true or false,
             }
@@ -2043,6 +2362,7 @@ local function _ShowDummyDebuffs(self, frame, s)
                                 dispellable = p.dispellable,
                                 rank = f.rank, mult = f.mult,
                                 sub = 1, seq = p.order,
+                                li = liFlow[tostring(ci) .. ":" .. tostring(p.pkey)],
                             }
                         end
                     end
@@ -2051,59 +2371,62 @@ local function _ShowDummyDebuffs(self, frame, s)
         end
     end
 
-    -- Merged order (see _RowItemLess above).
-    if nItems > 1 then table.sort(items, _RowItemLess) end
-
-    -- ── v92 §B7.1: CURSOR LAYOUT (replaces the uniform CalcAuraOffsets grid) ─
-    -- The offsets table advanced EVERY slot by exactly size + spacing, so it
-    -- cannot express an enlarged boss dummy or a differently-sized inline
-    -- container icon. Accumulate each icon's OWN size along the grow axis
-    -- instead (the pattern the container multi-preset arm already uses), wrap
-    -- by Icons Per Row, and step the cross axis by the completed row's TALLEST
-    -- icon -- the preview twin of the live row's lineSizeSlack semantics. The
-    -- 1px AnchorNudge the offsets table used to bake in is added here.
-    local ApplyDummyIcon = s.ApplyDummyIcon
-    local debuffAnchor, debuffOffX, debuffOffY = s.debuffAnchor, s.debuffOffX, s.debuffOffY
-    local perRow = s.debuffsPerRow or 3
-    if perRow < 1 then perRow = 1 end
-    local spacing = BF:PixelRound(s.debuffSpacing or 1)
-    local rowSp   = BF:PixelRound(s.debuffRowSpacing or 1)
-    local dir = (BF.NormalizeGrowDirection
-        and BF.NormalizeGrowDirection(s.debuffGrowDir or "RIGHT_DOWN", debuffAnchor))
-        or "RIGHT_DOWN"
-    local prim, sec = dir:match("^(%u+)_(%u+)$")
-    if not prim then prim, sec = "RIGHT", "DOWN" end
-    local pvx = (prim == "RIGHT" and 1) or (prim == "LEFT" and -1) or 0
-    local pvy = (prim == "UP"    and 1) or (prim == "DOWN" and -1) or 0
-    local wvx = (sec  == "RIGHT" and 1) or (sec  == "LEFT" and -1) or 0
-    local wvy = (sec  == "UP"    and 1) or (sec  == "DOWN" and -1) or 0
-    local nx, ny = AnchorNudge(debuffAnchor)
-    -- BOTTOM-anchor gate: lifting above the power bar only makes sense when
-    -- icons grow from the bottom edge of the health bar. Hoisted -- it is
-    -- constant for the whole row (inline icons ride the same host).
-    local anchorParent = frame
-    if db.aurasAbovePowerBar and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
-       and (debuffAnchor == "BOTTOM" or debuffAnchor == "BOTTOMLEFT" or debuffAnchor == "BOTTOMRIGHT") then
-        anchorParent = frame.healthBar
+    -- Merged order: the LIVE group order (each item's group's layoutIndex
+    -- from the live shape), the icons of one group in their pool order. The
+    -- engine's aura sort INSIDE a group cannot be known here (it sorts real
+    -- auras), so a group's dummies keep a stable order. _RowItemLess (rank /
+    -- sub / seq, the shape's own sort keys) only when the shape is unavailable.
+    local allLi = true
+    for i = 1, nItems do
+        if items[i].li == nil then allLi = false; break end
     end
+    if nItems > 1 then
+        if allLi then
+            table.sort(items, function(a, b)
+                if a.li ~= b.li then return a.li < b.li end
+                return a.seq < b.seq
+            end)
+        else
+            table.sort(items, _RowItemLess)
+        end
+    end
+
+    -- ── THE ROW'S FLOW (2026-10-12): the live engine's placement ────────────
+    -- The settings the live geometry pass pushes for this row
+    -- (DebuffContainerSpecs -> ApplyAuraGridGeometry), from this preview
+    -- frame's own aura cache, plus the wrap slack DebuffIcons:Layout stamps
+    -- from the live shape (size x (maxMult - 1)); laid out by the shared
+    -- preview flow. Each icon's cell is its live group cell: the row size x
+    -- the group's mult (a type's Relative Size, or a flowed preset's
+    -- flow-set mult) -- unrounded, as the engine's cell is.
+    local ApplyDummyIcon = s.ApplyDummyIcon
+    local dGeoSize = ac._roundedDebuffSize or 12
+    local dMaxMult = liveShape and liveShape.maxMult or 1
+    local f = _pvHostFlow({
+        size          = dGeoSize,
+        anchor        = ac.debuffAnchor or "BOTTOMLEFT",
+        offsetX       = ac.debuffOffsetX,
+        offsetY       = ac.debuffOffsetY or 0,
+        growDirection = ac.debuffGrowDir,
+        perRow        = ac.debuffsPerRow,
+        spacing       = ac.debuffSpacing,
+        rowSpacing    = ac.debuffRowSpacing,
+        lineSizeSlack = (dMaxMult > 1) and (dGeoSize * (dMaxMult - 1)) or 0,
+    }, ac, groupTypeKey, nil)
+    local target = _pvFlowTarget(self, frame, ac, f)
+    _pvComputePush(self, frame, ac, groupTypeKey)
+    _pvApplyPush(frame, f, target)
+    local elems = {}
 
     local presetDefs = BF.DEBUFF_CONTAINER_PRESETS
     -- 2026-08-25: only the `rec` items draw from the pool -- inline container
     -- icons ride their container's own SF_PreviewContainerIcons slots -- but
     -- nItems is a safe upper bound and costs nothing to over-ask by.
     local poolN = _EnsureDummyDebuffPool(frame, nItems)
-    local primC, secC, rowMax, col = 0, 0, 0, 0
     local dummySlot = 0
     for i = 1, nItems do
         local it = items[i]
-        if col >= perRow then
-            secC = secC + rowMax + rowSp
-            primC, rowMax, col = 0, 0, 0
-        end
-        local isz = BF:PixelRound(dSize * (it.mult or 1))
-        if isz < 2 then isz = 2 end
-        local px = primC * pvx + secC * wvx + nx + debuffOffX
-        local py = primC * pvy + secC * wvy + ny + debuffOffY
+        local isz = f.size * (it.mult or 1)
         if it.rec then
             dummySlot = dummySlot + 1
             local icon = frame.debuffFrames[dummySlot]
@@ -2180,8 +2503,7 @@ local function _ShowDummyDebuffs(self, frame, s)
                 elseif dtiIcon then
                     dtiIcon:Hide()
                 end
-                icon:ClearAllPoints()
-                icon:SetPoint(debuffAnchor, anchorParent, debuffAnchor, px, py)
+                elems[#elems + 1] = { w = isz, h = isz, region = icon }
                 -- The group's own name, not a blanket "Debuffs". The
                 -- Setup-Mode -> Preview prefix swap in SetDummyTooltip keys on
                 -- the "Setup Mode: " prefix, which this keeps.
@@ -2202,17 +2524,17 @@ local function _ShowDummyDebuffs(self, frame, s)
             owned[it.ci] = n
             local icon = _ensurePreviewContainerIcon(frame, "debuff", it.ci, n)
             icon:SetSize(isz, isz)
-            icon:ClearAllPoints()
-            icon:SetPoint(debuffAnchor, anchorParent, debuffAnchor, px, py)
+            elems[#elems + 1] = { w = isz, h = isz, region = icon }
             local pdef = presetDefs and presetDefs[it.pkey]
             _paintPreviewContainerIcon(self, frame, icon, it.c, it.ci, "debuff", ac,
                 groupTypeKey, ApplyDummyIcon, it.tex, isz, it.dispellable,
                 "Setup Mode: " .. ((pdef and pdef.name) or it.pkey))
             icon:Show()
         end
-        primC = primC + isz + spacing
-        if isz > rowMax then rowMax = isz end
-        col = col + 1
+    end
+    _pvFlowLayout(elems, f)
+    for i = 1, #elems do
+        _pvPlace(elems[i].region, f, target, elems[i])
     end
     for idx = dummySlot + 1, poolN do
         local icon = frame.debuffFrames[idx]; if icon and icon:IsShown() then icon:Hide() end
@@ -2326,7 +2648,7 @@ end
 -- ============================================================
 local function _ShowDummyBigDef(self, frame, s)
     if not frame.bigDefIcons then return end
-    local db, bdP = s.db, s.bdP
+    local bdP = s.bdP
     local bdSize  = s.bdSize
     local enabled = bdP.showBigDef or false
     if s.dispelDebuffBorderOnly or s.customAurasOnly then enabled = false end
@@ -2346,10 +2668,10 @@ local function _ShowDummyBigDef(self, frame, s)
             HideDummyGlow(frame.bigDefIcons[i])
             if frame.bigDefIcons[i]:IsShown() then frame.bigDefIcons[i]:Hide() end
         end
+        _hidePvHostBars(frame, "bigDef")
         return
     end
     local ac         = BF:GetAuraCacheForFrame(frame)
-    local anchorPos  = bdP.bigDefAnchor or "CENTER"
     local maxCount   = bdP.bigDefMaxCount or 1
     local showDur    = ac.showBigDefDuration
     local bdAutoScale = ac.bigDefAutoScale
@@ -2360,15 +2682,10 @@ local function _ShowDummyBigDef(self, frame, s)
     local bdSwipe    = ac.disableBigDefSwipe or false
     local bdSpark    = ac.disableBigDefSpark or false
     local bdReverse  = ac.reverseBigDefSwipe == true
-    local nx, ny = AnchorNudge(anchorPos)
-    local ap   = (anchorPos ~= "") and anchorPos or "CENTER"
-    local offX = bdP.bigDefOffsetX or 0
-    local offY = bdP.bigDefOffsetY or 0
-    -- v34: two-axis grid offsets — use the cache's CalcAuraOffsets
-    -- precompute (includes the anchor nudge). One source of truth with
-    -- the real path and the buff/debuff dummies; replaces the old inline
-    -- single-axis step math (which hardcoded rows-down wrapping).
-    local bdOffsets = ac._bigDefOffsets
+    -- 2026-10-12: placement is the shared preview flow below (the live
+    -- engine's), not the CalcAuraOffsets grid (_bigDefOffsets) -- that grid
+    -- carried a 1px anchor nudge and count-based wrapping the 12.1 container
+    -- has neither of.
     -- v33: border color resolves via GetDefaultBorderColorFor so the
     -- "Also Color Aura Border" toggle (bigDefColorAuraBorder) paints the
     -- border in Font Color instead of black. Matches the real-path branch.
@@ -2394,26 +2711,39 @@ local function _ShowDummyBigDef(self, frame, s)
     local bdSet   = _SingleBuffPreviewItems(self, frame, ac, bdGroupTypeKey)
     local bdItems = bdSet and bdSet.bigDef
     if bdItems and #bdItems == 0 then bdItems = nil end
+    -- ── THE ROW'S FLOW (owner 2026-10-12): the live engine's placement ──────
+    -- The settings the live geometry pass pushes for Big Defensive
+    -- (BigDefContainerSpecs -> ApplyAuraGridGeometry), from this preview
+    -- frame's own aura cache, laid out by the shared preview flow
+    -- (_pvFlowLayout). The live group order: Before bars / Before icons, then
+    -- `bd`'s content (layoutIndex 1000 -- the dummies; suppressed while an
+    -- entry set exists), then After icons / After bars (_SBItemLess). Each
+    -- element at its live cell: dummies at the base size, an entry at its own
+    -- (_pvEntryCell), a bar by BF.SpellBarFlowCell. Icons draw from the icon
+    -- pool (`pooled`); bars from their own pool.
+    local f = _pvHostFlow({
+        size          = ac._roundedBigDefSize or 24,
+        anchor        = ac.bigDefAnchor,
+        offsetX       = ac.bigDefOffsetX,
+        offsetY       = ac.bigDefOffsetY,
+        growDirection = ac.bigDefGrowDirection,
+        perRow        = ac.bigDefIconsPerRow,
+        spacing       = ac.bigDefSpacing,
+        rowSpacing    = ac.bigDefRowSpacing,
+    }, ac, bdGroupTypeKey, "bigDef")
+    local target = _pvFlowTarget(self, frame, ac, f)
+    _pvComputePush(self, frame, ac, bdGroupTypeKey)
+    _pvApplyPush(frame, f, target)
+    local elems, barKeep = {}, nil
     local bdBaseCount = bdSet and 0 or math.min(maxCount, #frame.bigDefIcons)
     for i = 1, bdBaseCount do
         local icon = frame.bigDefIcons[i]
-        ApplyDummyIcon(icon, DUMMY_BIGDEF_ICON, bR, bG, bB, bdSize, showDur, bdSwipe, bdSpark, bdReverse, bfFont, bfSize, bfBorder, bfScale, bA, ac.bigDefFontColor, nil, ac.expiringCurveBigDef, ac.bigDefBorderThickness, DummyBorderStyle(ac.bigDefBorderStyle, ac.bigDefBlizzardBorders), nil)
+        ApplyDummyIcon(icon, DUMMY_BIGDEF_ICON, bR, bG, bB, f.size, showDur, bdSwipe, bdSpark, bdReverse, bfFont, bfSize, bfBorder, bfScale, bA, ac.bigDefFontColor, nil, ac.expiringCurveBigDef, ac.bigDefBorderThickness, DummyBorderStyle(ac.bigDefBorderStyle, ac.bigDefBlizzardBorders), nil)
         -- v94: same reason as the buffs row -- raising Max Defensives hands a
         -- slot an anchored entry held last pass back to a base dummy, and the
         -- entry's glow would ride along.
         if BF.ClearPreviewIconEffectFx then BF.ClearPreviewIconEffectFx(icon) end
-        icon:SetSize(bdSize, bdSize)
-        icon:ClearAllPoints()
-        local off = bdOffsets and bdOffsets[i]
-        local slotOffX = offX + (off and off.x or nx)
-        local slotOffY = offY + (off and off.y or ny)
-        local anchorParent = frame
-        -- BOTTOM-anchor gate: matches the real BigDefIcons render path.
-        if db.aurasAbovePowerBar and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
-           and (ap == "BOTTOM" or ap == "BOTTOMLEFT" or ap == "BOTTOMRIGHT") then
-            anchorParent = frame.healthBar
-        end
-        icon:SetPoint(ap, anchorParent, ap, slotOffX, slotOffY)
+        icon:SetSize(f.size, f.size)
         SetDummyTooltip(icon, "Setup Mode: Big Defensive")
         icon:Show()
         -- Glow
@@ -2427,49 +2757,54 @@ local function _ShowDummyBigDef(self, frame, s)
         -- from the new Glow Color / Glow Style options, exactly as
         -- BigDefContainerSpecs feeds them to ApplyGlow on live frames.
         if s.bdP.bigDefShowGlow == true then
-            ApplyDummyGlow(icon, bdSize, s.bdP.bigDefGlowColor,
+            ApplyDummyGlow(icon, f.size, s.bdP.bigDefGlowColor,
                 s.bdP.bigDefGlowStyle == "pulse")
         else
             HideDummyGlow(icon)
         end
+        elems[#elems + 1] = { w = f.size, h = f.size, region = icon }
     end
-    -- v94: the anchored entries, continuing the same offsets grid so they land
-    -- in the row rather than on top of it. Each at its OWN size and visuals --
-    -- an anchored entry always has its own group live (row 14: "No share path
-    -- exists"), so it is never drawn at the bigDef base size.
-    -- Anchored entries continue from wherever the dummies stopped -- which is
-    -- slot 0 while the entry set is suppressing them, so they start at 1.
-    local used = bdBaseCount
+    -- v94: the anchored entries -- each at its OWN size and visuals (an
+    -- anchored entry always has its own group live: row 14, "No share path
+    -- exists"), plus the Stage 4 hosted bars.
+    local pooled = bdBaseCount
     if bdItems then
         for i = 1, #bdItems do
-            local slot = used + 1
-            local icon = frame.bigDefIcons[slot]
-            if not icon then break end
-            local it  = bdItems[i]
-            local isz = BF:PixelRound(self:ResolveContainerGeometry(it.c, bdGroupTypeKey, ac, nil) or bdSize)
-            if _PaintSingleBuffDummy(self, frame, icon, it, isz, ac, bdGroupTypeKey,
-                    ApplyDummyIcon, bR, bG, bB, bA,
-                    "Setup Mode: " .. (it.c.name or tostring(it.sid))) then
-                icon:SetSize(isz, isz)
-                icon:ClearAllPoints()
-                local off = bdOffsets and bdOffsets[slot]
-                local anchorParent = frame
-                if db.aurasAbovePowerBar and frame.powerBar and frame.powerBar:IsShown() and frame.healthBar
-                   and (ap == "BOTTOM" or ap == "BOTTOMLEFT" or ap == "BOTTOMRIGHT") then
-                    anchorParent = frame.healthBar
+            local it = bdItems[i]
+            if it.bar then
+                local cw, ch = BF.SpellBarFlowCell(it.bs, f.grow.axis, f.lineSize)
+                if cw then
+                    elems[#elems + 1] = { w = cw, h = ch, bar = true,
+                        region = _pvHostBar(self, frame, "bigDef", it) }
+                    barKeep = barKeep or {}
+                    barKeep[it.ci] = true
                 end
-                icon:SetPoint(ap, anchorParent, ap,
-                    offX + (off and off.x or nx), offY + (off and off.y or ny))
-                -- The bigDef glow is a container-level feature of the Big
-                -- Defensive display, not a property of an anchored entry, so
-                -- an entry's icon never carries it.
-                HideDummyGlow(icon)
-                icon:Show()
-                used = slot
+            else
+                local icon = frame.bigDefIcons[pooled + 1]
+                local cell = _pvEntryCell(self, it, bdGroupTypeKey, ac, f.size)
+                if icon and _PaintSingleBuffDummy(self, frame, icon, it, cell, ac, bdGroupTypeKey,
+                        ApplyDummyIcon, bR, bG, bB, bA,
+                        "Setup Mode: " .. (it.c.name or tostring(it.sid))) then
+                    icon:SetSize(cell, cell)
+                    -- The bigDef glow is a container-level feature of the Big
+                    -- Defensive display, not a property of an anchored entry,
+                    -- so an entry's icon never carries it.
+                    HideDummyGlow(icon)
+                    icon:Show()
+                    pooled = pooled + 1
+                    elems[#elems + 1] = { w = cell, h = cell, region = icon }
+                end
             end
         end
     end
-    for i = used + 1, #frame.bigDefIcons do
+    _pvFlowLayout(elems, f)
+    for i = 1, #elems do
+        local e = elems[i]
+        _pvPlace(e.region, f, target, e)
+        if e.bar then e.region:Show() end
+    end
+    _hidePvHostBars(frame, "bigDef", barKeep)
+    for i = pooled + 1, #frame.bigDefIcons do
         HideDummyGlow(frame.bigDefIcons[i])
         if frame.bigDefIcons[i]:IsShown() then
             if BF.ClearPreviewIconEffectFx then BF.ClearPreviewIconEffectFx(frame.bigDefIcons[i]) end
@@ -2756,9 +3091,10 @@ end
 --
 -- Thin: it resolves WHICH entry and hands the three families to the shared
 -- painter (BF:ApplyPreviewSpellFrameEffects). The gate for a single buff is
--- its Display Type, which lives inside GetSingleBuffVisualEntry -- an entry in
--- "Show (Default Buff)" or Blacklist mode returns nil for every family and so
--- paints nothing, which is correct: neither mode has frame effects.
+-- its Show Frame Effects switch (Display-tab redesign), which lives inside
+-- GetSingleBuffVisualEntry -- off, every frame-effect family reads nil and
+-- paints nothing, customized or not, exactly as live. A blacklisted entry is
+-- dropped below.
 -- ============================================================
 local function _ShowBuffListFrameEffects(self, frame, s)
     if not frame._isPreviewFrame then return end
@@ -3135,8 +3471,8 @@ end
 -- Build the ordered preset list for a debuff container's multi-icon preview:
 -- one entry { pkey, order, ratio, rank, tex, dispellable } per assigned preset.
 -- Two callers, two orders (v92 §B7.2):
---   * FLOATING container (`ranks` nil) -- sorted LARGEST-FIRST (ratio desc, tie
---     by canonical preset order) to mirror the live layoutIndex ordering.
+--   * FLOATING container (`ranks` nil) -- sorted by the LIVE layoutIndex key
+--     (largest first, the floor-quantized ratio, then canonical order).
 --     v92 (combined pairs): the old "nil for a 0/1-preset container" early-out
 --     is gone -- it collapsed "no presets" and "one preset" into one answer, and
 --     the caller then re-derived the icon from c.presets (GetContainerPreviewIcon),
@@ -3214,8 +3550,17 @@ _debuffPresetPreviewList = function(self, c, ranks, ci, pairOwn, ac)
     -- real answer the caller paints as its single representative icon.
     if #list == 0 then return nil end
     if #list > 1 then
+        -- 2026-10-12: the LIVE key, not "ratio desc": ApplyPresetGroups gives a
+        -- floating debuff container's preset group layoutIndex
+        -- 1500 + floor((2 - ratio) x 1000) + its canonical index, and the engine
+        -- flows groups by layoutIndex. The floor makes nearly-equal ratios fall
+        -- back to the canonical order the way live does.
+        for i = 1, #list do
+            local e = list[i]
+            e.li = math.floor((2.0 - e.ratio) * 1000) + e.order
+        end
         table.sort(list, function(a, b)
-            if a.ratio ~= b.ratio then return a.ratio > b.ratio end
+            if a.li ~= b.li then return a.li < b.li end
             return a.order < b.order
         end)
     end
@@ -3223,15 +3568,128 @@ _debuffPresetPreviewList = function(self, c, ranks, ci, pairOwn, ac)
 end
 
 -- Paint the preview icon(s) for every container of one kind.
+-- ── Duration Bar plan §5.5 / §5.7 (Stage 3): SELF-POSITIONED BAR PREVIEW ──
+-- A static bar per entry on the preview frame, at the live bar's size,
+-- anchor, orientation, colors, background and border, with a fixed 60% fill.
+-- The SAME spec (BF.ResolveSpellBarSpec) and the SAME style function
+-- (BF.ApplySpellBarStyle) as the live sbb<ci> slot, on the same region set
+-- (BF.BuildSpellBarRegions) hosted on a plain frame -- so the preview cannot
+-- size or color a bar differently from the game. The Pandemic Effect is
+-- not drawn (alpha 0): a static preview is never inside the refresh window,
+-- and the icon preview does not draw it either.
+-- Pooled per container index on the preview frame and never destroyed; a
+-- pass hides every bar it did not paint.
+local function _hidePreviewSingleBuffBars(frame, keep)
+    local pool = frame._bf_pvBars
+    if pool then
+        for ci, r in pairs(pool) do
+            if not (keep and keep[ci]) and r.holder:IsShown() then r.holder:Hide() end
+        end
+    end
+    -- Stage 5: the empty-bar art goes with its bar (keep = the painted bars
+    -- that also drew an empty state; see _PaintPreviewSingleBuffBars).
+    local ea = frame._bf_pvEmpty
+    if ea then
+        local ek = keep and keep.empty
+        for ci, r in pairs(ea) do
+            if not (ek and ek[ci]) and r.holder:IsShown() then r.holder:Hide() end
+        end
+    end
+end
+
+-- ONE ANCHOR RULE with the live slot (owner 2026-10-12): the preview bar
+-- anchors through BF.SingleBuffBarTarget (BuffsAndContainers.lua) -- lift
+-- target, else frame.container, else the frame -- with the same spec
+-- (BF.ResolveSpellBarSpec: half-pixel border edge, size cap). On a preview
+-- frame the container IS the live content rect on every refresh path:
+-- BF.ComputeFrameContentGeometry reserves the preview power strip from the
+-- preview power bar's shown flag, and ApplyPreviewPowerBar re-lays out the
+-- container on a flip. Preview frames only (the items come from
+-- _SingleBuffPreviewItems, which answers nil for anything else).
+local function _PaintPreviewSingleBuffBars(self, frame, items, groupTypeKey, ac)
+    local painted
+    if items and #items > 0 and self.ResolveSpellBarSpec and self.BuildSpellBarRegions
+       and self.SingleBuffBarTarget then
+        for i = 1, #items do
+            local it = items[i]
+            local bset, bentry = self.GetSpellBar(it.sid, groupTypeKey, it.c)
+            local bs = bset and self.ResolveSpellBarSpec(frame, bset, bentry)
+            if bs and not bs.flow and bs.w and bs.h then
+                local pool = frame._bf_pvBars
+                if not pool then pool = {}; frame._bf_pvBars = pool end
+                local r = pool[it.ci]
+                if not r then
+                    local holder = CreateFrame("Frame", nil, frame)
+                    -- The live slot button's level: frame +223, +1.
+                    holder:SetFrameLevel(frame:GetFrameLevel() + 224)
+                    r = self.BuildSpellBarRegions(holder, holder:GetFrameLevel())
+                    pool[it.ci] = r
+                end
+                self.ApplySpellBarStyle(r, bs)
+                r.pandemic:SetAlpha(0)
+                r.pandemicFill:SetAlpha(0)
+                r.bar:SetMinMaxValues(0, 1)
+                r.bar:SetValue(PREVIEW_BAR_FILL)
+                local holder = r.holder
+                holder:SetSize(bs.w, bs.h)
+                holder:ClearAllPoints()
+                -- The live anchor rule, the live function (see above).
+                -- bs.offsetX/Y already carry the half-pixel border edge.
+                local target = self.SingleBuffBarTarget(frame, bs.anchor)
+                holder:SetPoint(bs.anchor, target, bs.anchor, bs.offsetX, bs.offsetY)
+                holder:Show()
+                painted = painted or {}
+                painted[it.ci] = true
+                -- Stage 5: Show Empty Bar When Missing -- the live empty-state
+                -- art (MaintainSingleBuffEmptyBar): background + border on the
+                -- frame at +223, directly under the bar, whole-bar background,
+                -- no fill, no pandemic; the bar above drew without them
+                -- (BF.ApplySpellBarStyle, bs.emptyBar).
+                if bs.emptyBar then
+                    local ep = frame._bf_pvEmpty
+                    if not ep then ep = {}; frame._bf_pvEmpty = ep end
+                    local er = ep[it.ci]
+                    if not er then
+                        local eh = CreateFrame("Frame", nil, frame)
+                        eh:SetFrameLevel(frame:GetFrameLevel() + 223)
+                        er = self.BuildSpellBarRegions(eh, eh:GetFrameLevel())
+                        ep[it.ci] = er
+                    end
+                    local art = {}
+                    for k, v in pairs(bs) do art[k] = v end
+                    art.emptyBar, art.bgWhole, art.pandemic = false, true, false
+                    self.ApplySpellBarStyle(er, art)
+                    er.pandemic:SetAlpha(0)
+                    er.pandemicFill:SetAlpha(0)
+                    er.bar:SetMinMaxValues(0, 1)
+                    er.bar:SetValue(0)
+                    er.holder:SetSize(bs.w, bs.h)
+                    er.holder:ClearAllPoints()
+                    er.holder:SetPoint(bs.anchor, target, bs.anchor, bs.offsetX, bs.offsetY)
+                    er.holder:Show()
+                    painted.empty = painted.empty or {}
+                    painted.empty[it.ci] = true
+                end
+            end
+        end
+    end
+    _hidePreviewSingleBuffBars(frame, painted)
+end
+
 local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeDur)
     if not containers or #containers == 0 then
         _hideAllPreviewContainerIcons(frame, kind)
+        if kind == "buff" then
+            _hidePreviewSingleBuffBars(frame)
+            _hidePvHostBars(frame, nil, nil, "bfc")
+        end
         return
     end
     local isDebuff = (kind == "debuff")
     local ac = self:GetAuraCacheForFrame(frame)
     local groupTypeKey = frame._bf_containerGroupTypeKey or self:ResolveGroupTypeKey(frame)
     local ApplyDummyIcon = MakeApplyDummyIcon(fakeNow, fakeDur)
+    _pvComputePush(self, frame, ac, groupTypeKey)
 
     -- v92 (combined pairs): one ownership resolution for the whole pass, the
     -- twin of the row assembler's. Debuff containers only -- the pairs are
@@ -3297,6 +3755,8 @@ local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeD
         onlyCI = self.GetPreviewContainerIndex and self:GetPreviewContainerIndex() or nil
     end
     local sbFloat = nil
+    -- Stage 4: hostId -> set of entry indexes whose hosted bar this pass drew.
+    local hostBarKeep = nil
     if sbSet then
         for i = 1, #sbSet.floating do
             sbFloat = sbFloat or {}
@@ -3378,36 +3838,40 @@ local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeD
             -- it); the remaining underscored locals are still unused.
             local size, _maxIcons, _spacing, _rowSpacing, _perRow, anchor, offX, offY, growDir =
                 self:ResolveContainerGeometry(c, groupTypeKey, ac, isDebuff and "debuff" or nil)
-            size = size or 12
-            anchor = anchor or (isDebuff and "BOTTOMLEFT" or "BOTTOMRIGHT")
-            local nx, ny = AnchorNudge(anchor)
-            local baseX, baseY = (offX or 0) + nx, (offY or 0) + ny
-            -- Row grow: which way and along which axis. Default matches the debuff
-            -- anchor (BOTTOMLEFT grows RIGHT). Vertical grow stacks on Y.
-            local norm = (BF.NormalizeGrowDirection and BF.NormalizeGrowDirection(growDir, anchor)) or growDir
-            local vertical = BF.GrowDirectionIsVertical and BF.GrowDirectionIsVertical(norm) or false
-            -- Sign of the row step along the primary axis: horizontal grows +X
-            -- unless "LEFT"; vertical grows +Y ("UP") unless "DOWN".
-            local ns = type(norm) == "string" and norm or ""
-            local negative
-            if vertical then negative = ns:find("DOWN") ~= nil
-            else negative = ns:find("LEFT") ~= nil end
-            -- 2026-08-25 FIX (owner report: "I updated the icon spacing in a
-            -- container and the preview doesn't update"). This was a hardcoded
-            -- SPACING = 1 while ResolveContainerGeometry's own `spacing` and
-            -- `rowSpacing` -- the container's Icon Spacing and Row/Column
-            -- Spacing -- were unpacked and thrown away.
-            --
-            -- Pixel-rounded like the main row's cursor, so a container block
-            -- and the Debuffs row snap identically.
+            -- 2026-10-12: THE LIVE GEOMETRY of this container, as its live
+            -- builder hands it to ApplyAuraGridGeometry -- ContainerGeoDebuff
+            -- for a debuff container, ContainerGeo for a buff container (with
+            -- its "bfc<ci>" single-buff slack) and for a floating single buff
+            -- (no slack) -- and the live lift target. Every arm below places
+            -- through it: the flow arms via _pvFlowLayout, the one-icon arms
+            -- at the flow's first position (0, 0), which is also exactly where
+            -- AnchorSingleBuffSlotButton puts a floating single buff (same
+            -- anchor rule, same lift target, same offsets). No 1px nudge: the
+            -- live 12.1 path has none.
             --
             -- _maxIcons stays unused, deliberately: the engine gives a debuff
             -- container one GROUP PER PRESET, each capped by its own type's Max
-            -- Debuffs (applied per preset just above), so a single
-            -- container-wide ceiling here would cap the preview at a number no
-            -- live group honors.
-            local SPACING = BF:PixelRound(_spacing or 1)
-            local ROWSPACING = BF:PixelRound(_rowSpacing or 0)
+            -- Debuffs (applied per preset below), so a single container-wide
+            -- ceiling here would cap the preview at a number no live group
+            -- honors.
+            local rawAnchor = anchor
+            size = size or 12
+            local cf = _pvHostFlow({
+                size          = size,
+                anchor        = rawAnchor,
+                offsetX       = offX,
+                offsetY       = offY,
+                growDirection = BF.NormalizeGrowDirection
+                    and BF.NormalizeGrowDirection(growDir, rawAnchor) or growDir,
+                perRow        = _perRow,
+                spacing       = _spacing,
+                rowSpacing    = _rowSpacing,
+            }, ac, groupTypeKey, (not isDebuff and not c.singleBuff) and ("bfc" .. ci) or nil)
+            local cTarget = _pvFlowTarget(self, frame, ac, cf)
+            -- Stage 5: pushed like the live container / sbc slot (computed
+            -- once for the pass, above the container loop).
+            _pvApplyPush(frame, cf, cTarget)
+            local ORIGIN = { ox = 0, oy = 0 }
 
             -- ── 2026-08-25 (owner report): PER-PRESET COUNTS ─────────────
             -- A floating debuff container previewed ONE icon per preset --
@@ -3437,58 +3901,36 @@ local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeD
             end
             local slotCount = 0
             if presetList and (#presetList > 1 or totalIcons > 1) then
-                -- One RUN per preset, largest-first, laid out along the grow
-                -- axis accumulating each icon's own (different) size, and
-                -- wrapping by the container's own Icons Per Row.
-                --
-                -- Wrapping is new with the counts and is why maxPerRow is read
-                -- at all (it was resolved and discarded before): three presets
-                -- at Max 3 would otherwise draw a nine-icon strip that ignores
-                -- the layout the container is actually configured for. Cross-
-                -- axis step is the completed line's TALLEST icon -- the same
-                -- mixed-size rule the main row's cursor uses.
-                local maxPerRow = _perRow or 0
-                if maxPerRow < 1 then maxPerRow = #presetList end
-                if maxPerRow < 1 then maxPerRow = 1 end
-                local cursor, lineMax, col, cross = 0, 0, 0, 0
+                -- One RUN per preset, in the LIVE group order (layoutIndex
+                -- 1500 + floor((2 - ratio) x 1000) + canonical index:
+                -- _debuffPresetPreviewList), each icon at its group's live cell
+                -- (size x Relative Size, unrounded), laid out by the shared
+                -- preview flow with this container's live geometry -- pixel
+                -- wrapping against its line budget, the line's largest icon as
+                -- its cross step. The engine's aura sort inside one group cannot
+                -- be known here, so a group's icons keep a stable order.
+                local elems = {}
                 for idx, p in ipairs(presetList) do
-                    local isz = math.max(2, math.floor(size * (p.ratio or 1) + 0.5))
+                    local isz = size * (p.ratio or 1)
                     local tex = p.tex
                     if tex then
                         local label = "Setup Mode: " .. (BF.DEBUFF_CONTAINER_PRESETS[p.pkey]
                             and BF.DEBUFF_CONTAINER_PRESETS[p.pkey].name or p.pkey)
                         for _ = 1, (presetCount and presetCount[idx] or 1) do
-                            if col >= maxPerRow then
-                                cross = cross + lineMax + ROWSPACING
-                                cursor, lineMax, col = 0, 0, 0
-                            end
                             slotCount = slotCount + 1
                             local icon = _ensurePreviewContainerIcon(frame, kind, ci, slotCount)
                             icon:SetSize(isz, isz)
-                            local dx, dy = baseX, baseY
-                            local step  = (negative and -1 or 1) * cursor
-                            -- The cross axis is whichever one the grow axis is
-                            -- not; its sign follows the anchor the same way the
-                            -- primary step does.
-                            local xstep = (negative and -1 or 1) * cross
-                            if vertical then
-                                dy = baseY + step
-                                dx = baseX + xstep
-                            else
-                                dx = baseX + step
-                                dy = baseY + xstep
-                            end
-                            icon:ClearAllPoints()
-                            icon:SetPoint(anchor, frame, anchor, dx, dy)
                             _paintPreviewContainerIcon(self, frame, icon, c, ci, kind, ac,
                                 groupTypeKey, ApplyDummyIcon, tex, isz, p.dispellable,
                                 label)
                             icon:Show()
-                            cursor = cursor + isz + SPACING
-                            if isz > lineMax then lineMax = isz end
-                            col = col + 1
+                            elems[#elems + 1] = { w = isz, h = isz, region = icon }
                         end
                     end
+                end
+                _pvFlowLayout(elems, cf)
+                for i = 1, #elems do
+                    _pvPlace(elems[i].region, cf, cTarget, elems[i])
                 end
             else
                 -- Single representative icon.
@@ -3521,8 +3963,10 @@ local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeD
                             groupTypeKey, ApplyDummyIcon, dR, dG, dB, dA,
                             "Setup Mode: " .. (c.name or tostring(sbHere.sid))) then
                         icon:SetSize(size, size)
-                        icon:ClearAllPoints()
-                        icon:SetPoint(anchor, frame, anchor, baseX, baseY)
+                        -- The live sbc<ci> slot's placement
+                        -- (AnchorSingleBuffSlotButton): its anchor ("" / nil ->
+                        -- CENTER), the lift target or the frame, its offsets.
+                        _pvPlace(icon, cf, cTarget, ORIGIN)
                         icon:Show()
                     else
                         slotCount = 0
@@ -3537,56 +3981,94 @@ local function _paintContainerKind(self, frame, kind, containers, fakeNow, fakeD
                 end
                 if texPath then
                     slotCount = 1
+                    -- A debuff container's one preset group draws at its live
+                    -- cell (size x that preset's Relative Size); a buff
+                    -- container's stand-in at the container size.
+                    local isz = (isDebuff and single) and (size * (single.ratio or 1)) or size
                     local icon = _ensurePreviewContainerIcon(frame, kind, ci, 1)
-                    icon:SetSize(size, size)
-                    icon:ClearAllPoints()
-                    icon:SetPoint(anchor, frame, anchor, baseX, baseY)
+                    icon:SetSize(isz, isz)
+                    -- One element: the flow's first position (0, 0).
+                    _pvPlace(icon, cf, cTarget, ORIGIN)
                     _paintPreviewContainerIcon(self, frame, icon, c, ci, kind, ac,
-                        groupTypeKey, ApplyDummyIcon, texPath, size, dispellable,
+                        groupTypeKey, ApplyDummyIcon, texPath, isz, dispellable,
                         "Setup Mode: Container " .. (c.name or tostring(ci)))
                     icon:Show()
                 end
             end
-            -- ── v94: entries anchored INSIDE this container ───────────
-            -- Matrix rows 12-13: the entry flows in the HOST, so it is drawn
-            -- on the host's own slots, continuing the host's cursor along its
-            -- grow axis. Painted before the sweep below, so slotCount covers
-            -- them and they are released with the rest of the host's slots
-            -- when the host goes away or the entry re-anchors.
-            local sbIn = sbSet and sbSet.byCI[ci] or nil
-            if sbIn and #sbIn > 0 and not skip then
-                local step = (vertical and (negative and -1 or 1))
-                    or (negative and -1 or 1)
+            -- ── A BUFF CONTAINER'S BLOCK AS THE LIVE FLOW (2026-10-12) ──────
+            -- v94 matrix rows 12-13: entries anchored INSIDE this container
+            -- flow in it; Stage 4 adds hosted bars. The whole block -- the
+            -- representative icon this pass drew for the container's own
+            -- content (slot 1) and the anchored entries -- is placed by the
+            -- shared preview flow (_pvFlowLayout), with the settings the live
+            -- geometry pass pushes for it (ContainerGeo -> ApplyAuraGridGeometry:
+            -- grow direction normalized against the anchor, GROW_MAP axis and
+            -- signs, Icons Per Row default 5, raw spacing, the "bfc<ci>" slack,
+            -- the power-bar lift) and in the live group order: Before bars /
+            -- icons, then the container's own group (layoutIndex 1000: its
+            -- content, then entries that share it), then After icons / bars.
+            -- Debuff containers keep their own arms above.
+            if not isDebuff and not skip and not sbHere then
+                local f, target = cf, cTarget
+                local hostId = "bfc" .. ci
+                local elems = {}
+                local hostIcon = (slotCount >= 1)
+                    and _ensurePreviewContainerIcon(frame, kind, ci, 1) or nil
+                local hostAdded = false
+                local sbIn = sbSet and sbSet.byCI[ci] or nil
                 local dR, dG, dB, dA = BF.GetDefaultBorderColorFor("buff", ac)
-                -- Continue past whatever the host itself drew, at the host's
-                -- own spacing. The host's icons are all `size`, so the cursor
-                -- start is exact; each entry then advances by its OWN size,
-                -- which is what makes the run mixed-size.
-                local cursor = slotCount * (size + SPACING)
-                for i = 1, #sbIn do
-                    local it = sbIn[i]
-                    local isz = BF:PixelRound(
-                        self:ResolveContainerGeometry(it.c, groupTypeKey, ac, nil) or size)
-                    local icon = _ensurePreviewContainerIcon(frame, kind, ci, slotCount + 1)
-                    if _PaintSingleBuffDummy(self, frame, icon, it, isz, ac,
-                            groupTypeKey, ApplyDummyIcon, dR, dG, dB, dA,
-                            "Setup Mode: " .. (it.c.name or tostring(it.sid))) then
-                        slotCount = slotCount + 1
-                        icon:SetSize(isz, isz)
-                        icon:ClearAllPoints()
-                        if vertical then
-                            icon:SetPoint(anchor, frame, anchor, baseX, baseY + cursor * step)
-                        else
-                            icon:SetPoint(anchor, frame, anchor, baseX + cursor * step, baseY)
+                for i = 1, (sbIn and #sbIn or 0) + 1 do
+                    local it = sbIn and sbIn[i]
+                    -- The container's own content enters the flow where band 2
+                    -- starts (or at the end, when every entry is Before).
+                    if not hostAdded and (not it or it.band >= 2) then
+                        hostAdded = true
+                        if hostIcon then
+                            elems[#elems + 1] = { w = f.size, h = f.size, region = hostIcon }
                         end
-                        icon:Show()
-                        cursor = cursor + isz + SPACING
                     end
+                    if it and it.bar then
+                        local cw, ch = BF.SpellBarFlowCell(it.bs, f.grow.axis, f.lineSize)
+                        if cw then
+                            elems[#elems + 1] = { w = cw, h = ch, bar = true,
+                                region = _pvHostBar(self, frame, hostId, it) }
+                            hostBarKeep = hostBarKeep or {}
+                            hostBarKeep[hostId] = hostBarKeep[hostId] or {}
+                            hostBarKeep[hostId][it.ci] = true
+                        end
+                    elseif it then
+                        local cell = _pvEntryCell(self, it, groupTypeKey, ac, f.size)
+                        local icon = _ensurePreviewContainerIcon(frame, kind, ci, slotCount + 1)
+                        if _PaintSingleBuffDummy(self, frame, icon, it, cell, ac,
+                                groupTypeKey, ApplyDummyIcon, dR, dG, dB, dA,
+                                "Setup Mode: " .. (it.c.name or tostring(it.sid))) then
+                            slotCount = slotCount + 1
+                            icon:SetSize(cell, cell)
+                            icon:Show()
+                            elems[#elems + 1] = { w = cell, h = cell, region = icon }
+                        end
+                    end
+                end
+                _pvFlowLayout(elems, f)
+                for i = 1, #elems do
+                    local e = elems[i]
+                    _pvPlace(e.region, f, target, e)
+                    if e.bar then e.region:Show() end
                 end
             end
             -- Hide any leftover slots of this container beyond what we painted.
             _hidePreviewContainerSlots(frame, kind, ci, slotCount + 1)
         end
+    end
+    -- Duration Bar (Stage 3): the Buff List set's self-positioned bars. Only
+    -- the Buff List pass previews them -- the container tab's own set has no
+    -- `bars`, so every bar hides there.
+    if not isDebuff then
+        _PaintPreviewSingleBuffBars(self, frame, sbSet and sbSet.bars,
+            groupTypeKey, ac)
+        -- Stage 4: container-hosted bars this pass did not paint (host gone,
+        -- skipped, re-anchored, bar off).
+        _hidePvHostBars(frame, nil, hostBarKeep, "bfc")
     end
     -- Hide pooled icons of containers that no longer exist (index past #containers).
     local root = frame.SF_PreviewContainerIcons
@@ -3621,6 +4103,8 @@ function BF:ShowGeneralContainerPreviews(frame, showBuffs, showDebuffs, fakeNow,
         _paintContainerKind(self, frame, "buff", self:GetActiveCustomBuffContainers(), fakeNow, fakeDur)
     else
         _hideAllPreviewContainerIcons(frame, "buff")
+        _hidePreviewSingleBuffBars(frame)
+        _hidePvHostBars(frame, nil, nil, "bfc")   -- Duration Bar (Stage 4)
     end
     if showDebuffs then
         _paintContainerKind(self, frame, "debuff", self:GetActiveCustomDebuffContainers(), fakeNow, fakeDur)
@@ -3639,6 +4123,8 @@ function BF:HideGeneralContainerPreviews(frame)
     if not frame then return end
     _hideAllPreviewContainerIcons(frame, "buff")
     _hideAllPreviewContainerIcons(frame, "debuff")
+    _hidePreviewSingleBuffBars(frame)   -- Duration Bar (Stage 3)
+    _hidePvHostBars(frame, nil, nil, "")  -- Stage 4: every host's bars (prefix "" = all)
     -- v92 §B7.2: the row's inline-slot bookkeeping goes with them, so the next
     -- row pass does not walk a map of already-hidden slots.
     frame._bf_rowOwnedCI = nil

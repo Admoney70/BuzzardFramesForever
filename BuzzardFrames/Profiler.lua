@@ -216,11 +216,10 @@ local function GetProfilTargets()
         { "RangeTick",                       BF, "RangeTick" },
 
         -- ── Ping mirror (PingMirror.lua) ───────────────────────────────────
-        -- Tick: the 0.2s IsShown() poll over the pre-resolved receiver list
-        -- (only attached while the list is non-empty). Resolve: the
-        -- roster-change rebuild of that list. PingIndicator:Update is the
-        -- raid-frame indicator's per-unit toggle/GUID check.
-        { "PingMirror:Tick",                 BF.pingMirror, "Tick" },
+        -- Resolve: the roster-change rebuild of the receiver list (the 0.2s
+        -- Tick poll is gone -- pings are hook-driven, 2026-11-17).
+        -- PingIndicator:Update is the raid-frame indicator's per-unit
+        -- toggle/GUID check.
         { "PingMirror:Resolve",              BF.pingMirror, "Resolve" },
         { "PingIndicator:Update",            BF.indicators and BF.indicators.pingIndicator, "Update" },
 
@@ -647,7 +646,7 @@ end
 -- script wrap above contains). Everything else in the method table nests
 -- inside a Roster/oUF/RaidFrame script row or one of these.
 local TOP_METHOD_ROWS = {
-    "PingMirror:Tick", "ThresholdPollOnTick", "RangeTick",
+    "ThresholdPollOnTick", "RangeTick",
     "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE",
     "IC:OnSpellcastStart", "IC:OnSpellcastChannelStart", "IC:OnSpellcastEnd",
     "IC:OnNameplateAdded", "IC:OnNameplateRemoved", "IC:ProcessCast",

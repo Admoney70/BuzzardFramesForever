@@ -53,7 +53,7 @@
 -- GetSectionProfile / WriteSectionKey / the per-Layout scope machinery
 -- applies here and this section takes NO per-Layout scope row. Reads and
 -- writes go through ROOT below, a table-shaped view of ufDB.profile that
--- repeats the Ace setters' `x = x or {}` materialisation, so `bind` (and
+-- repeats the Ace setters' `x = x or {}` materialization, so `bind` (and
 -- with it right-click Undo and Reset) works on the plain fields.
 --
 -- The route itself is gated in the Ace panel by
@@ -88,6 +88,7 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The unit-frame profile. Everything on this section lives under it.
 local function UFProfile()
@@ -106,7 +107,7 @@ end
 -- ── The routed root ────────────────────────────────────────────
 --
 -- `bind` walks a dotted path into the page's db. ufDB.profile IS that
--- table, but the Ace setters materialise `ufLayoutFrames` on write
+-- table, but the Ace setters materialize `ufLayoutFrames` on write
 -- (`p.ufLayoutFrames = p.ufLayoutFrames or {}`) and a bind cannot, so the
 -- page hands the library a view that does. Reads fall through, writes land
 -- on exactly the slots the Ace setters wrote to.
@@ -156,7 +157,7 @@ local function Root() return ROOT end
 -- ── Side effects, verbatim from the Ace builder ────────────────
 
 -- Apply UF positions after layout or group type change. The combat guard
--- is the Ace one, kept as it stands rather than summarised.
+-- is the Ace one, kept as it stands rather than summarized.
 local function ApplyPositions()
     local bf = BF()
     if not bf then return end
@@ -317,6 +318,7 @@ local function RemoveUFLayout(ctx, val)
             end
         end
     end
+    if ForeverUI() then ForeverUI().UFClassUsages(p, val, usages) end -- [FOREVER]
     if #usages > 0 then
         local msg = "Cannot delete UF layout \"" .. name .. "\" — it is assigned in " .. #usages .. " place(s):\n"
         for _, u in ipairs(usages) do
@@ -646,6 +648,7 @@ end
 local function SpecLayoutsTable()
     local p = UFProfile()
     if not p then return nil end
+    if ForeverUI() then return {} end -- [FOREVER]
     p.ufSpecLayouts = p.ufSpecLayouts or {}
     return p.ufSpecLayouts
 end
@@ -666,6 +669,7 @@ local function SyncEnableFlags()
     for _ in pairs(RoleLayoutsTable() or {}) do anyRole = true break end
     local anySpec = false
     for _ in pairs(SpecLayoutsTable() or {}) do anySpec = true break end
+    if ForeverUI() then return ForeverUI().SyncUFClassFlags(p, anyRole, ApplyRoleSpec) end -- [FOREVER] class flag in place of the spec flag
     p.enableUFRoleLayouts = anyRole
     p.enableUFSpecLayouts = anySpec
     ApplyRoleSpec()
@@ -697,6 +701,7 @@ local function UFRoleSpecMembers()
                           id = "spec_" .. sp.idStr,
                           title = "|T" .. sp.icon .. ":14|t " .. sp.name }
     end
+    if ForeverUI() then ForeverUI().AppendUFClassMembers(out, UFProfile()) end -- [FOREVER]
     -- GLOBAL, always and always LAST: it is what every override above it
     -- falls back to, and a fallback belongs at the foot of the list rather
     -- than at its head. Not sourced from the profile like the others --
@@ -739,6 +744,7 @@ end
 local function SpecOverrideActive()
     local p = UFProfile()
     if not p then return false end
+    if ForeverUI() then return ForeverUI().UFClassOverrideActive(p) end -- [FOREVER]
     local specIndex = GetSpecialization and GetSpecialization()
     local specID = specIndex and GetSpecializationInfo
                    and tostring(select(1, GetSpecializationInfo(specIndex)))
@@ -765,13 +771,15 @@ local function UFRoleSpecMemberPage(mctx)
                 { control = "note", wide = true, font = "GameFontNormalLarge",
                   color = { 1, 1, 1, 1 }, text = "Global" },
                 { control = "note", wide = true,
-                  text = "This Layout is used unless an override exists for "
+                  text = ForeverUI() and ForeverUI().TEXT.ufGlobal or -- [FOREVER]
+                      "This Layout is used unless an override exists for "
                       .. "the current Role or Spec." },
             }},
             { title = "Layout", preset = "form", fields = {
                 { control = "dropdown", label = "Layout",
                   labelPlacement = "above",
-                  desc = "The Unit Frame Layout used when no Role or Spec "
+                  desc = ForeverUI() and ForeverUI().TEXT.ufGlobalDesc or -- [FOREVER]
+                      "The Unit Frame Layout used when no Role or Spec "
                       .. "override applies. The Layout currently in use is "
                       .. "shown in green.",
                   -- No `bind`: the setter touches BF state as well as the
@@ -813,6 +821,7 @@ local function UFRoleSpecMemberPage(mctx)
         }}
     end
 
+    if item.kind == "class" and ForeverUI() then return ForeverUI().UFClassMemberPage(mctx, UFProfile, OverrideLayoutOptions, ApplyRoleSpec) end -- [FOREVER]
     local isRole = (item.kind == "role")
     local badge  = isRole and "|cff7f77ddRole override|r"
                           or  "|cff1d9e75Spec override|r"
@@ -825,7 +834,8 @@ local function UFRoleSpecMemberPage(mctx)
             -- Ace: specOverrideNote, on the entry it actually concerns.
             { control = "note", wide = true,
               hidden = function() return not (isRole and SpecOverrideActive()) end,
-              text = "|cffff9900|TInterface\\DialogFrame\\UI-Dialog-Icon-AlertOther:14:14:0:0|t The current spec has an active spec-specific layout which overrides this role.|r" },
+              text = ForeverUI() and ForeverUI().TEXT.ufRoleBeaten or -- [FOREVER]
+                  "|cffff9900|TInterface\\DialogFrame\\UI-Dialog-Icon-AlertOther:14:14:0:0|t The current spec has an active spec-specific layout which overrides this role.|r" },
         }},
 
         { title = "Layout", preset = "form", fields = {
@@ -888,7 +898,8 @@ local function UFRoleSpecRootPage()
         -- it heads is one the reader has to rule out.
         { preset = "bare", fields = {
             { control = "note", wide = true,
-              text = "Give a role or a spec its own Unit Frame Layout. If "
+              text = ForeverUI() and ForeverUI().TEXT.ufIntro or -- [FOREVER]
+                  "Give a role or a spec its own Unit Frame Layout. If "
                   .. "both are defined for what you are currently playing, "
                   .. "the Spec override takes priority." },
 
@@ -915,6 +926,7 @@ local function UFRoleSpecRootPage()
               end },
 
             -- Specs without an entry, alphabetical by name.
+            ForeverUI() and ForeverUI().UFAddClassField() or -- [FOREVER]
             { control = "dropdown", label = "Add Spec Overrides",
               labelPlacement = "above",
               options = function()
@@ -1013,6 +1025,7 @@ function BuzzardFramesOptions:UFLayoutsRoleSpecRoute()
             select = true,
             onAdd  = function(kind, val)
                 local p = UFProfile()
+                if kind == "class" then local FO = ForeverUI(); return FO and FO.UFClassAdd(p, val, SyncEnableFlags) or nil end -- [FOREVER]
                 if kind == "role" then
                     local rl = RoleLayoutsTable()
                     if not rl then return nil end
@@ -1075,6 +1088,7 @@ function BuzzardFramesOptions:UFLayoutsRoleSpecRoute()
             onRemove = function(item)
                 local p = UFProfile()
                 if not p then return end
+                if item.kind == "class" then local FO = ForeverUI(); if FO then FO.UFClassRemove(p, item.entryKey) end SyncEnableFlags() return end -- [FOREVER]
                 if item.kind == "role" then
                     if p.ufRoleLayouts then p.ufRoleLayouts[item.entryKey] = nil end
                     if p.ufRoleLayoutAssignment then

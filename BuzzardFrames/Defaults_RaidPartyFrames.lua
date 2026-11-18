@@ -27,7 +27,7 @@ BF.raidPartyFrameDefaults = {
             -- (Phase L: the pre-flat named-layout tree -- layouts.layouts
             -- with its per-tier party/raid40/30/20 profiles -- and
             -- activeLayout are GONE. Flats (flatLayouts below) are the only
-            -- layout storage. Do not reintroduce: AceDB materialised the
+            -- layout storage. Do not reintroduce: AceDB materialized the
             -- whole default tree into every profile on every login, which
             -- was the single biggest block of dead weight in exports.)
 
@@ -719,6 +719,9 @@ BF.raidPartyFrameDefaults = {
             -- Heal prediction
             showHealPrediction           = true,
             healPredictionAnchor         = "RIGHT",
+            -- Whose incoming heals the bar shows: "all", "me" (the
+            -- player's own -- the long-standing behavior) or "others".
+            healPredictionSource         = "me",
             healPredictionColor          = { r = 0, g = 0.7, b = 0, a = 0.6 },
             useCustomHealPredictionTexture = false,
             healPredictionTexture        = "Solid",
@@ -830,7 +833,7 @@ BF.raidPartyFrameDefaults = {
             bgColor              = { r = 0.08, g = 0.08, b = 0.08, a = 1.0 },
             bgOpacity            = 1.0,
             -- Bar opacity is now the alpha channel of `color` (a) -- the
-            -- standalone opacity slider was removed in favour of the color
+            -- standalone opacity slider was removed in favor of the color
             -- picker's alpha. See CastBar:Layout.
 
             -- Border. "square" = four 1px edge textures; the two rounded
@@ -914,6 +917,9 @@ BF.raidPartyFrameDefaults = {
             showPingIndicator     = true,
             pingIndicatorSize     = 24,
             pingIndicatorPosition = { point = "CENTER", x = 0, y = 0 },
+            -- Keep the pin at full alpha and above the OOR darken overlay
+            -- on out-of-range units (PingIndicator:Layout).
+            pingIgnoreRangeFade   = true,
 
             -- Leader / assistant icons
             showLeaderIcon        = true,
@@ -927,12 +933,45 @@ BF.raidPartyFrameDefaults = {
             -- NOTE: These need to be moved back from acDB in the migration.
             showMissingRaidBuff        = false,
             showMissingRaidBuffInCombat = false,
+            -- RETIRED 2026-11-16 (dbVersion 82): Symbiotic Relationship is an
+            -- Enabled Buffs tick now (missingRaidBuffs.DRUID_SYMBIOTIC). The
+            -- stored key survives in old profiles and nothing reads it.
             showMissingSymbiotic       = false,
             missingRaidBuffAnchor      = "CENTER",
             missingRaidBuffOffsetX     = 0,
             missingRaidBuffOffsetY     = 0,
             missingRaidBuffSize        = 12,
+            missingRaidBuffSpacing     = 2,
+            -- RETIRED 2026-11-17 (dbVersion 83): replaced by the Icon Effect
+            -- below; a stored true became Marching Ants. Nothing reads it.
             missingRaidBuffShowGlow    = false,
+            -- Icon Effect, as the Buffs have it: "none"|"glow"|"ants"|"flash";
+            -- Glow Style "steady"|"pulse" (glow only); Effect Color {r,g,b,a}.
+            missingRaidBuffIconEffect          = "none",
+            missingRaidBuffIconEffectGlowStyle = "steady",
+            missingRaidBuffIconEffectColor     = { r = 1, g = 0, b = 0, a = 1 },
+            -- Desaturate Icons: the gray "missing" look the icons always had.
+            missingRaidBuffDesaturate          = true,
+            -- Enabled Buffs: one tick per BF.MISSING_RAID_BUFFS key, Retail
+            -- and Forever keys together (each game reads only its own). Only
+            -- an explicit true counts. Symbiotic Relationship starts off, as
+            -- its old switch did.
+            missingRaidBuffs = {
+                DRUID_MOTW       = true,
+                DRUID_SYMBIOTIC  = false,
+                EVOKER_BRONZE    = true,
+                MAGE_INTELLECT   = true,
+                PRIEST_FORTITUDE = true,
+                PRIEST_SPIRIT    = true,
+                PRIEST_SHADOW    = true,
+                SHAMAN_SKYFURY   = true,
+                WARRIOR_SHOUT    = true,
+            },
+            -- Instance Type condition (the Buzzard Auras Load Conditions
+            -- grid): off = shows everywhere. On, only an instance type whose
+            -- entry is explicitly true counts, so nothing ticked = nowhere.
+            missingRaidBuffLoadInstance  = false,
+            missingRaidBuffInstanceTypes = {},
         },
 
         -- ================================================================

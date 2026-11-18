@@ -373,7 +373,7 @@ local BOUNDARIES = {
 }
 
 local SPAN_NAME = {
-    ["chunk:origin>chunk:end"]   = "PARSE + execute of every .toc chunk",
+    ["chunk:origin>chunk:end"]   = "PARSE + execute of every addon file",
     ["chunk:end>init:enter"]     = "SavedVariables load -> ADDON_LOADED",
     ["init:enter>init:exit"]     = "OnInitialize (RegisterDB)",
     ["init:exit>enable:enter"]   = "gap: ADDON_LOADED -> PLAYER_LOGIN (client + other addons)",
@@ -447,7 +447,7 @@ function BF:BuildLoadReport(wantMarks)
 
     local marks = self._loadMarks
     if not marks or #marks == 0 then
-        add("   no marks recorded. LoadTiming.lua may be missing from the .toc.")
+        add("   no marks recorded.")  -- dev: LoadTiming.lua missing from the .toc
         return L
     end
     local detail = self:LoadDetailOn()
@@ -512,7 +512,7 @@ function BF:BuildLoadReport(wantMarks)
     add(format("   %10.1f  TOTAL (first mark -> last mark)", last))
 
     -- ── derived, overlapping ──
-    add("   --- DERIVED (overlapping; the §L3 ranking numbers) ---")
+    add("   --- DERIVED (overlapping) ---")
     for i = 1, #DERIVED do
         local row = DERIVED[i]
         local a = FirstAt(marks, row[2])
@@ -671,7 +671,7 @@ function BF:PrintLoadReport(arg)
 
     if not wantChat then
         if BF:ShowTextWindow("BuzzardFrames Load Report", table.concat(L, "\n"), {
-            status = "Login phase breakdown (perf plan §L5.1). Marks survive the harness seal, so this can be reopened at any time with /bf loadreport.",
+            status = "Login phase breakdown. This can be reopened at any time with /bf loadreport.",
             width  = 760, height = 560,
         }) then
             return

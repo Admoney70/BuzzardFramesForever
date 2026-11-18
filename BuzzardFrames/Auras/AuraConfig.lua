@@ -315,16 +315,22 @@ function BF:ApplyAuraGeometry(frame)
             end
         end
     end
-    if frame.missingRaidBuffIcon then
+    -- Every missing-raid-buff slot (Indicators/MissingRaidBuff.lua); slot 1
+    -- is frame.missingRaidBuffIcon and always the first entry.
+    local mrbSlots = frame.missingRaidBuffIcons
+    if mrbSlots then
         local mSize = BF:PixelRound(ac.missingRaidBuffSize or 12)
-        frame.missingRaidBuffIcon:SetSize(mSize, mSize)
-        if SetFrameBackdrop(frame.missingRaidBuffIcon, backdrop) then
-            SetIconBorderColor(frame.missingRaidBuffIcon, 0, 0, 0, 0.8)
-        end
-        if frame.missingRaidBuffIcon.Icon then
-            frame.missingRaidBuffIcon.Icon:ClearAllPoints()
-            frame.missingRaidBuffIcon.Icon:SetPoint("TOPLEFT", borderSize, -borderSize)
-            frame.missingRaidBuffIcon.Icon:SetPoint("BOTTOMRIGHT", -borderSize, borderSize)
+        for i = 1, #mrbSlots do
+            local mIcon = mrbSlots[i]
+            mIcon:SetSize(mSize, mSize)
+            if SetFrameBackdrop(mIcon, backdrop) then
+                SetIconBorderColor(mIcon, 0, 0, 0, 0.8)
+            end
+            if mIcon.Icon then
+                mIcon.Icon:ClearAllPoints()
+                mIcon.Icon:SetPoint("TOPLEFT", borderSize, -borderSize)
+                mIcon.Icon:SetPoint("BOTTOMRIGHT", -borderSize, borderSize)
+            end
         end
     end
     -- Container icons: resolve per-container size (respects override toggle
