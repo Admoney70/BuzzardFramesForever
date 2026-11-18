@@ -55,6 +55,8 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- The section profile currently being modified. With the per-layout
 -- toggle OFF, GetSectionProfile ignores the flat and returns the global;
@@ -307,6 +309,17 @@ end
 
 local function Sl(bind, label, lo, hi, st, opts)
     local f = { control = "slider", label = label, bind = bind,
+                min = lo, max = hi, step = st,
+                onChange = Refresh, disabled = "combat" }
+    for k, v in pairs(opts or {}) do f[k] = v end
+    return f
+end
+
+-- A stepper, not a slider: a handful of whole numbers, where the reader
+-- wants "one more" rather than a position on a track, and the number can be
+-- typed directly. Same arguments as Sl, so a field converts by its name.
+local function St(bind, label, lo, hi, st, opts)
+    local f = { control = "stepper", label = label, bind = bind,
                 min = lo, max = hi, step = st,
                 onChange = Refresh, disabled = "combat" }
     for k, v in pairs(opts or {}) do f[k] = v end
@@ -729,6 +742,20 @@ function PAGES.appearance()
                       and bf.IsRoundedBorderStyle(ip and ip.borderStyle) or false
               end },
             Col("borderColor", "Border Color", true, { hidden = NoBorder }),
+        }},
+        { title = "Empowered Casts", preset = "form", hidden = ForeverHide(), fields = { -- [FOREVER] F9
+            -- empowerInfo, as a note: visible with the section (not gated
+            -- on the pips toggle), as in the Ace page.
+            { control = "note", wide = true, hidden = Off,
+              text = "Empowered casts (Evoker) fill toward a series of stages. "
+                  .. "These marks show where each stage lands on the bar.\n\n"
+                  .. "|cff888888The game does not tell addons which stage a cast is currently in, "
+                  .. "so the marks are fixed and cannot light up as the cast progresses.|r" },
+            Sw("showEmpowerPips", "Show Stage Marks", { hidden = Off }),
+            Col("pipColor", "Stage Mark Color", true,
+                { hidden = HiddenUnless("showEmpowerPips") }),
+            St("pipWidth", "Stage Mark Width", 1, 6, 1,
+               { hidden = HiddenUnless("showEmpowerPips") }),
         }},
     }
 end

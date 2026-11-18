@@ -101,11 +101,10 @@ function BF.HasPingPinEvents()
 end
 
 -- ------------------------------------------------------------
--- Real-ping mirror. Blizzard_PingUI runs in a secure environment, so
--- script hooks / method overrides on its frames can't be relied on;
--- IsShown() and GetAtlas() are engine state and read fine from here.
--- One light ticker polls the receivers' IconFrame and mirrors
--- show/hide + kit onto our widgets.
+-- Real-ping mirror. IsShown() and GetAtlas() on a receiver's IconFrame are
+-- engine state and read fine from here. 2026-11-17: driven by
+-- hooksecurefunc on each receiver's ShowPing / ClearPing, as Grid2's
+-- StatusPing.lua does (see HookReceiver below). No polling.
 -- ------------------------------------------------------------
 -- v96: each entry carries the oUF frame key AND that frame's own enable
 -- flag, so the per-frame gate in CollectUnitFramePins costs one table read
@@ -179,36 +178,47 @@ end
 
 local pingEntries = {}      -- { iconFrame = f, [1..n] = pin textures }
 local pingRebuildPending
-local pingTickerOn = false
 
--- Profiler hooks: the ticker and resolver are exposed on this table and
--- always invoked THROUGH it, so Profiler.lua can wrap them by name
--- (PingMirror:Tick / PingMirror:Resolve).
+-- Profiler hook: the resolver is exposed on this table and always invoked
+-- THROUGH it, so Profiler.lua can wrap it by name (PingMirror:Resolve).
 BF.pingMirror = {}
 
-local function PingTick()
-    for i = 1, #pingEntries do
-        local e = pingEntries[i]
-        local icf = e.iconFrame
-        for j = 1, #e do MirrorIconFrame(icf, e[j]) end
-    end
+-- ============================================================
+-- Event-driven mirroring (2026-11-17, owner: "use the same approach as
+-- Grid2"). Grid2's StatusPing.lua hooksecurefunc's each Blizzard compact
+-- frame's pingIconFrame :ShowPing / :ClearPing (after an IsForbidden check)
+-- and does nothing between pings. Same here: every receiver an entry is
+-- resolved to is hooked ONCE, and a hook mirrors only that receiver's own
+-- pins, reading the receiver's IsShown()/GetAtlas() state. NO fallback, as
+-- Grid2 has none (owner, 2026-11-17): a receiver that cannot be hooked (no
+-- ShowPing/ClearPing on it, or forbidden) gets no pin, and its pins are kept
+-- hidden. The 0.2s poll that used to drive every receiver is gone.
+--
+-- hookedRecv is weak-keyed: a hook cannot be removed, so the set only
+-- remembers which receivers already carry one. entryByRecv is rebuilt on
+-- every resolve, so a hook whose receiver no longer maps to any pin does
+-- nothing.
+-- ============================================================
+local hookedRecv  = setmetatable({}, { __mode = "k" })
+local entryByRecv = {}
+
+local function OnReceiverChanged(recv)
+    local e = entryByRecv[recv]
+    if not e then return end
+    local icf = e.iconFrame
+    for j = 1, #e do MirrorIconFrame(icf, e[j]) end
 end
 
-BF.pingMirror.Tick = PingTick
-local function RunPingTick() return BF.pingMirror.Tick() end
-
--- C_Timer ticker rather than OnUpdate: no per-render-frame call just to
--- count down an accumulator, and nothing at all scheduled while off.
-local pingTickerHandle
-local function SetPingTicker(on)
-    if on == pingTickerOn or not pingMirror then return end
-    pingTickerOn = on
-    if on then
-        pingTickerHandle = C_Timer.NewTicker(0.2, RunPingTick)
-    elseif pingTickerHandle then
-        pingTickerHandle:Cancel()
-        pingTickerHandle = nil
-    end
+local function HookReceiver(recv)
+    if not recv then return false end
+    if hookedRecv[recv] then return true end
+    if not (recv.ShowPing and recv.ClearPing) then return false end
+    local ok, forbidden = pcall(recv.IsForbidden, recv)
+    if not ok or forbidden then return false end
+    hooksecurefunc(recv, "ShowPing",  OnReceiverChanged)
+    hooksecurefunc(recv, "ClearPing", OnReceiverChanged)
+    hookedRecv[recv] = true
+    return true
 end
 
 local function HidePin(el)
@@ -280,9 +290,10 @@ local function CollectUnitFramePins(add)
             twinPin = twin and twin.pingIndicatorTex or nil
         end
         if pin or twinPin then
-            local icf = p[d.show] ~= false and GetBlizzardPingIconFrame(unit) or nil
+            local icf, recv
+            if p[d.show] ~= false then icf, recv = GetBlizzardPingIconFrame(unit) end
             if icf then
-                local e = { iconFrame = icf }
+                local e = { iconFrame = icf, recv = recv }
                 if pin     then e[#e + 1] = pin     end
                 if twinPin then e[#e + 1] = twinPin end
                 pingEntries[#pingEntries + 1] = e
@@ -401,7 +412,7 @@ local function ResolvePingEntries()
             if guid then
                 local pins = pinsByGUID[guid]
                 if pins then
-                    local e = { iconFrame = icf }
+                    local e = { iconFrame = icf, recv = recv }
                     matched = matched or {}
                     for i = 1, #pins do
                         e[i] = pins[i]
@@ -418,8 +429,24 @@ local function ResolvePingEntries()
         end
     end
 
+    -- Hook every resolved receiver (Grid2's approach). One mirror pass now,
+    -- so a ping already up when the list was rebuilt (roster change, toggle)
+    -- shows without waiting for the next ShowPing. A receiver that cannot be
+    -- hooked would never clear what that pass showed, so its pins are hidden
+    -- instead (Grid2 has no fallback for it either).
+    wipe(entryByRecv)
+    for i = 1, #pingEntries do
+        local e = pingEntries[i]
+        if HookReceiver(e.recv) then
+            entryByRecv[e.recv] = e
+            local icf = e.iconFrame
+            for j = 1, #e do MirrorIconFrame(icf, e[j]) end
+        else
+            for j = 1, #e do HidePin(e[j]) end
+        end
+    end
+
     BF._pingEntryCount = #pingEntries
-    SetPingTicker(#pingEntries > 0)
 end
 BF.pingMirror.Resolve = ResolvePingEntries
 -- Exposed for the PLAYER_REGEN_ENABLED handler below, which lives in a
@@ -500,9 +527,9 @@ function BF:EnsurePingMirror()
     BF:RebuildPingMirror()
 end
 
--- "ticking" / "idle" / "off" -- for /bf pingtest status (BF:DebugFakePing in
+-- "hooked" / "idle" / "off" -- for /bf pingtest status (BF:DebugFakePing in
 -- UnitFrames/oUF_Shared.lua), which can no longer see these upvalues.
 function BF:GetPingMirrorStatus()
-    if pingTickerOn then return "ticking" end
+    if next(entryByRecv) then return "hooked" end
     return pingMirror and "idle" or "off"
 end

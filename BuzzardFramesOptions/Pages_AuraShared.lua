@@ -409,10 +409,10 @@ end
 
 -- Copy one sub-category (or one scope of it) onto another Layout.
 --
--- The source is the RESOLVED view, so an un-materialised sub-category on
+-- The source is the RESOLVED view, so an un-materialized sub-category on
 -- the source flat falls through to the global and a pristine source
 -- still produces a copy populated with defaults. The destination is
--- materialised through GetOrCreateAurasSubCategory, which wires the
+-- materialized through GetOrCreateAurasSubCategory, which wires the
 -- metatable chain -- a table created without it answers nil for every
 -- key the copy does not carry.
 local function CopySubcatTo(subcat, scopeInfo, targetID)

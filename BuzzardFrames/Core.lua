@@ -220,7 +220,7 @@ end
 -- ============================================================
 function BF:OnInitialize()
     -- §L5.1: ADDON_LOADED boundary. Everything before this mark is file
-    -- parse + SavedVariables deserialisation; the delta from chunk:end is
+    -- parse + SavedVariables deserialization; the delta from chunk:end is
     -- exactly the SV load the /reload path pays differently to a cold login.
     self:LoadMark("init:enter")
     self:RegisterDB()

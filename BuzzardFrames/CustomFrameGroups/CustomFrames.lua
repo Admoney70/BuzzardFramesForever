@@ -55,9 +55,13 @@ do
 
     -- Human-readable class names for the options UI
     CLASS_DISPLAY_NAMES = {
+        DEATHKNIGHT = "Death Knight",
+        DEMONHUNTER = "Demon Hunter",
         DRUID       = "Druid",
+        EVOKER      = "Evoker",
         HUNTER      = "Hunter",
         MAGE        = "Mage",
+        MONK        = "Monk",
         PALADIN     = "Paladin",
         PRIEST      = "Priest",
         ROGUE       = "Rogue",
@@ -73,9 +77,11 @@ BF.CLASS_DISPLAY_NAMES = CLASS_DISPLAY_NAMES
 
 -- Sorted class list for consistent UI ordering (alphabetical)
 BF.CLASS_SORT_ORDER_ALPHA = {
-    "DRUID", "HUNTER", "MAGE", "PALADIN", "PRIEST",
-    "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR",
+    "DEATHKNIGHT", "DEMONHUNTER", "DRUID", "EVOKER", "HUNTER",
+    "MAGE", "MONK", "PALADIN", "PRIEST", "ROGUE",
+    "SHAMAN", "WARLOCK", "WARRIOR",
 }
+if BF.isForever then BF.Forever.ApplyCustomFrameClassLists(ROLE_CLASSES) end -- [FOREVER] 9-class list + all classes per role
 
 -- ============================================================
 -- DATA HELPERS

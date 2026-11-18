@@ -322,12 +322,28 @@ function BF.ComputeFrameContentGeometry(parent)
 	-- toggle, so the strip must be reserved even with all three flat
 	-- filters off (BF:TwinForcesPowerBar, LayoutFrame.lua). Non-twin
 	-- frames get nil back and behave exactly as before.
-	local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
+	local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers or hp.showPowerBarBloodDK
 		or (BF.TwinForcesPowerBar and BF:TwinForcesPowerBar(parent) == true)
 	local rawPowerH = anyPowerBar and (hp.powerBarHeight or 4) or 0
 	local powerH = BF.Scale and BF:Scale(rawPowerH) or rawPowerH
 	-- When no unit is assigned, or when the unit shouldn't show a power bar, reserve no space.
-	local effectivePowerH = (parent.unit and BF.ShouldShowPowerBar and BF:ShouldShowPowerBar(parent.unit, parent)) and powerH or 0
+	local effectivePowerH
+	if parent._isPreviewFrame then
+		-- OPTIONS PREVIEW frames (owner 2026-10-12) never get a unit, so the
+		-- rule below would always reserve nothing. Their power bar's
+		-- visibility is decided by ApplyPreviewPowerBar (PreviewData.lua) from
+		-- the fake unit, and nothing else shows it (PowerBar:Create hides it;
+		-- Update never runs without a unit), so its shown flag IS the
+		-- preview's answer. Height = the bar's own (PowerBar:Layout's
+		-- BF:Scale(powerBarHeight)), not gated on anyPowerBar: a standalone
+		-- preview's forcePower can show the bar with all three filters off.
+		-- Live frames never take this branch.
+		local pb = parent.powerBar
+		effectivePowerH = (pb and pb:IsShown())
+			and (BF.Scale and BF:Scale(hp.powerBarHeight or 4) or (hp.powerBarHeight or 4)) or 0
+	else
+		effectivePowerH = (parent.unit and BF.ShouldShowPowerBar and BF:ShouldShowPowerBar(parent.unit, parent)) and powerH or 0
+	end
 	-- Container is inset by the border width minus a half-pixel overlap
 	-- (see the anchor block in Container:Layout for why).
 	local halfPx = borderN > 0 and (pixelSize / (frameScale > 0 and frameScale or 1)) * 0.5 or 0

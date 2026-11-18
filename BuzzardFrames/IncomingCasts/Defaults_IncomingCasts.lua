@@ -128,7 +128,7 @@ BF.incomingCastsDefaults = {
         incomingCastsBarTimerFontBorder  = "",
         -- Legacy single text color; still the fallback for the two split
         -- colors below. The split keys default to nil (absent) so an old
-        -- profile that customised incomingCastsTextColor keeps that color
+        -- profile that customized incomingCastsTextColor keeps that color
         -- for both name and timer until it sets either new value.
         incomingCastsTextColor           = { r = 1, g = 1, b = 1, a = 1 },
         incomingCastsNameColor           = nil,

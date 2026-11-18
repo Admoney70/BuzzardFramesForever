@@ -590,7 +590,7 @@ function PAGES.absorbs()
                   .. "beyond the missing-health gap); with it OFF, the "
                   .. "Left anchor shows the total absorb.",
               onChange = Absorbs },
-            { control = "dropdown", label = "Overshield Style",
+            { control = "segmented", label = "Overshield Style",
               bind = "overshieldStyle",
               desc = "How to display absorbs exceeding max health",
               options = {
@@ -599,7 +599,7 @@ function PAGES.absorbs()
               },
               disabled = OvershieldDisabled,
               onChange = AbsorbsTexture },
-            { control = "dropdown", label = "Overshield Anchor",
+            { control = "segmented", label = "Overshield Anchor",
               bind = "overshieldAnchor",
               desc = "Position where the overshield anchors on the health bar",
               options = {
@@ -962,7 +962,7 @@ function PAGES.healPrediction()
                   end
                   HealPrediction()
               end },
-            { control = "dropdown", label = "Heal Prediction Anchor",
+            { control = "segmented", label = "Heal Prediction Anchor",
               bind = "healPredictionAnchor",
               desc = "Position where heal prediction bar anchors.\n\n"
                   .. "|cffffffffLeft|r: Overlays the health bar from the "
@@ -979,6 +979,22 @@ function PAGES.healPrediction()
               -- RefreshAllHealPrediction clears each frame's
               -- _healPredAnchor cache before the per-frame update so the
               -- bar is re-parented and re-anchored.
+              onChange = HealPrediction },
+            { control = "segmented", label = "Show Incoming Heals From",
+              bind = "healPredictionSource",
+              desc = "Whose incoming heals the heal prediction bar shows.\n\n"
+                  .. "|cffffffffAll|r: heals from everyone.\n\n"
+                  .. "|cffffffffMe Only|r: only your own heals.\n\n"
+                  .. "|cffffffffOthers Only|r: heals from everyone except you.",
+              options = {
+                  { value = "all",    text = "All" },
+                  { value = "me",     text = "Me Only" },
+                  { value = "others", text = "Others Only" },
+              },
+              disabled = CombatOrNot("showHealPrediction"),
+              -- HealPrediction -> RefreshAllHealPrediction -> UpdateHealPrediction
+              -- bumps the absorb style generation, so each frame re-resolves
+              -- the choice once (AbsorbBars:_ApplyAbsorbStyle).
               onChange = HealPrediction },
             { control = "color", label = "Heal Prediction Color", alpha = true,
               desc = "Color and opacity of the heal prediction bar",
@@ -1154,7 +1170,7 @@ function PAGES.reducedMax()
                   .. "separately.",
               hidden = TextOff, disabled = "combat",
               onChange = ReducedMaxTextBind },
-            { control = "dropdown", label = "Append To",
+            { control = "segmented", label = "Append To",
               bind = "appendReducedMaxTarget",
               desc = "Choose which text element to append the reduced max "
                   .. "health percentage to.",
@@ -1189,7 +1205,7 @@ function PAGES.reducedMax()
               min = 6, max = 24, step = 1,
               hidden = TextPlacementOff, disabled = "combat",
               onChange = LayoutFrames },
-            { control = "dropdown", label = "Font Border",
+            { control = "segmented", label = "Font Border",
               bind = "reducedMaxHealthFontBorder",
               options = {
                   { value = "",             text = "None" },

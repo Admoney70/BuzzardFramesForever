@@ -8,59 +8,123 @@ BF.SATED_SPELL_IDS = {
     [95809]  = true,  -- Insanity (Hunter pet)
     [160455] = true,  -- Fatigued (Hunter pet)
     [264689] = true,  -- Fatigued (Hunter pet)
+    [390435] = true,  -- Exhaustion (Evoker)
 }
 BF.DESERTER_SPELL_IDS = {
     [26013]  = true,  -- Deserter (BG)
     [71041]  = true,  -- Dungeon Deserter
 }
+BF.SKYRIDING_SPELL_IDS = {
+    [427490] = true,  -- Ride Along Available
+    [447959] = true,  -- Ride Along Active
+    [447960] = true,  -- Ride Along Inactive
+}
+BF.ARCANE_EMPOWERMENT_SPELL_IDS = {
+    [1254550] = true,  -- Arcane Empowerment
+}
+BF.TIME_TRIAL_SPELL_IDS = {
+    [308312]  = true,  -- Time Trial Practice
+}
 -- (DEBUFF_BLACKLIST removed: its only entry, Challenger's Burden, no
 -- longer exists in Midnight, and the table had no remaining consumers.)
--- Forever: long raid buffs the Buffs display hides IN COMBAT. Retail did
--- this with the RAID_IN_COMBAT filter token, a per-spell server flag the
--- Classic-era spell data does not carry, so the set is listed here instead.
--- Every rank has its own spell ID; later-expansion ranks are listed too
--- (an ID the client does not have simply never matches).
-BF.COMBAT_HIDDEN_BUFF_IDS = {}
-for _, ids in ipairs({
-    { 1126, 5232, 6756, 5234, 8907, 9884, 9885, 26990, 48469 },  -- Mark of the Wild
-    { 21849, 21850, 26991, 48470 },  -- Gift of the Wild
-    { 1243, 1244, 1245, 2791, 10937, 10938, 25389, 48161 },  -- Power Word: Fortitude
-    { 21562, 21564, 25392, 48162 },  -- Prayer of Fortitude
-    { 14752, 14818, 14819, 27841, 25312, 48073 },  -- Divine Spirit
-    { 27681, 32999, 48074 },  -- Prayer of Spirit
-    { 976, 10957, 10958, 25433, 48169 },  -- Shadow Protection
-    { 27683, 39374, 48170 },  -- Prayer of Shadow Protection
-    { 1459, 1460, 1461, 10156, 10157, 27126, 42995 },  -- Arcane Intellect
-    { 23028, 27127, 43002 },  -- Arcane Brilliance
-    { 19740, 19834, 19835, 19836, 19837, 19838, 25291, 27140, 48931, 48932 },  -- Blessing of Might
-    { 19742, 19850, 19852, 19853, 19854, 25290, 27142, 48935, 48936 },  -- Blessing of Wisdom
-    { 20217 },  -- Blessing of Kings
-    { 1038 },  -- Blessing of Salvation
-    { 19977, 19978, 19979, 27144 },  -- Blessing of Light
-    { 20911, 20912, 20913, 20914, 27168 },  -- Blessing of Sanctuary
-    { 25782, 25916, 27141, 48933, 48934 },  -- Greater Blessing of Might
-    { 25894, 25918, 27143, 48937, 48938 },  -- Greater Blessing of Wisdom
-    { 25898 },  -- Greater Blessing of Kings
-    { 25895 },  -- Greater Blessing of Salvation
-    { 25890, 27145 },  -- Greater Blessing of Light
-    { 25899, 27169 },  -- Greater Blessing of Sanctuary
-}) do
-    for i = 1, #ids do BF.COMBAT_HIDDEN_BUFF_IDS[ids[i]] = true end
-end
-
 -- Raid buff spell IDs per class, used for the "missing buff" indicator.
 -- Keyed by UnitClassBase() return value (uppercase English class name).
--- Each entry is a single spell ID (number).
+-- Each entry is either a single spell ID (number) or a set of IDs (table)
+-- for classes like Evoker whose buff lands as a class-specific variant on each unit.
 BF.CLASS_RAID_BUFF = {
     ["DRUID"]   = 1126,    -- Mark of the Wild
     ["PRIEST"]  = 21562,   -- Power Word: Fortitude
     ["WARRIOR"] = 6673,    -- Battle Shout
+    ["SHAMAN"]  = 462854,  -- Skyfury
     ["MAGE"]    = 1459,    -- Arcane Intellect
+    -- Evoker: Blessing of the Bronze lands as a class-specific variant on each unit
+    ["EVOKER"]  = {
+        [381732] = true,   -- Blessing of the Bronze: Death Knight
+        [381741] = true,   -- Blessing of the Bronze: Demon Hunter
+        [381746] = true,   -- Blessing of the Bronze: Druid
+        [381748] = true,   -- Blessing of the Bronze: Evoker
+        [381749] = true,   -- Blessing of the Bronze: Hunter
+        [381750] = true,   -- Blessing of the Bronze: Mage
+        [381751] = true,   -- Blessing of the Bronze: Monk
+        [381752] = true,   -- Blessing of the Bronze: Paladin
+        [381753] = true,   -- Blessing of the Bronze: Priest
+        [381754] = true,   -- Blessing of the Bronze: Rogue
+        [381756] = true,   -- Blessing of the Bronze: Shaman
+        [381757] = true,   -- Blessing of the Bronze: Warlock
+        [381758] = true,   -- Blessing of the Bronze: Warrior
+    },
 }
+
+-- Reverse lookup for Evoker: unit class -> the specific Blessing of the Bronze variant
+-- that lands on units of that class. Allows a single GetAuraDataBySpellID call
+-- instead of iterating all 13 variants.
+BF.EVOKER_BUFF_BY_CLASS = {
+    ["DEATHKNIGHT"] = 381732,
+    ["DEMONHUNTER"] = 381741,
+    ["DRUID"]       = 381746,
+    ["EVOKER"]      = 381748,
+    ["HUNTER"]      = 381749,
+    ["MAGE"]        = 381750,
+    ["MONK"]        = 381751,
+    ["PALADIN"]     = 381752,
+    ["PRIEST"]      = 381753,
+    ["ROGUE"]       = 381754,
+    ["SHAMAN"]      = 381756,
+    ["WARLOCK"]     = 381757,
+    ["WARRIOR"]     = 381758,
+}
+
+-- Missing Raid Buff: every buff the indicator can remind about, one entry
+-- per buff, grouped by class in the order the options page lists them and the
+-- icons fill their slots. Only the player's own class's entries are ever
+-- tracked; the rest are there for other characters sharing the profile.
+--   key        storage key in icons.missingRaidBuffs (shared with Forever
+--              where the buff exists on both, so a setting carries over)
+--   name       options label (literal: C_Spell.GetSpellName follows the
+--              player's own spell overrides)
+--   spell      the single-target spell, for the options icon
+--   ids        what the tracker looks for: a number, or the Evoker variant set
+--   personal   tracked on the player only, and only while grouped
+--   knownSpell tracked only while IsPlayerSpell(knownSpell) (a talent)
+BF.MISSING_RAID_BUFFS = {
+    { class = "DRUID",   key = "DRUID_MOTW",       name = "Mark of the Wild",
+      spell = 1126,   ids = 1126 },
+    { class = "DRUID",   key = "DRUID_SYMBIOTIC",  name = "Symbiotic Relationship",
+      spell = 474750, ids = 474754, personal = true, knownSpell = 474750 },
+    { class = "EVOKER",  key = "EVOKER_BRONZE",    name = "Blessing of the Bronze",
+      spell = 364342, ids = BF.CLASS_RAID_BUFF.EVOKER },
+    { class = "MAGE",    key = "MAGE_INTELLECT",   name = "Arcane Intellect",
+      spell = 1459,   ids = 1459 },
+    { class = "PRIEST",  key = "PRIEST_FORTITUDE", name = "Power Word: Fortitude",
+      spell = 21562,  ids = 21562 },
+    { class = "SHAMAN",  key = "SHAMAN_SKYFURY",   name = "Skyfury",
+      spell = 462854, ids = 462854 },
+    { class = "WARRIOR", key = "WARRIOR_SHOUT",    name = "Battle Shout",
+      spell = 6673,   ids = 6673 },
+}
+
+-- [FOREVER] begin
+-- WoW Forever: class raid buffs as rank sets, and the out-of-combat debuff
+-- filter sets that exist there (Forever/Forever_SpellData.lua, plan 12.4/13).
+if BF.isForever and BF.Forever then
+    local F = BF.Forever
+    BF.CLASS_RAID_BUFF              = F.CLASS_RAID_BUFF
+    BF.MISSING_RAID_BUFFS           = F.MISSING_RAID_BUFFS
+    BF.SATED_SPELL_IDS              = F.SATED_SPELL_IDS
+    BF.DESERTER_SPELL_IDS           = F.DESERTER_SPELL_IDS
+    BF.SKYRIDING_SPELL_IDS          = F.SKYRIDING_SPELL_IDS
+    BF.ARCANE_EMPOWERMENT_SPELL_IDS = F.ARCANE_EMPOWERMENT_SPELL_IDS
+    BF.TIME_TRIAL_SPELL_IDS         = F.TIME_TRIAL_SPELL_IDS
+end
+-- [FOREVER] end
 
 -- Per-spec raid buff spell IDs to show out of combat when the Raid Buffs setting is on.
 -- Only list spells that are actually cast by that spec.
 BF.SPEC_RAID_BUFF_IDS = {
+    -- Shaman
+    [264] = { [462854] = true },   -- Resto: Skyfury
+    [262] = { [462854] = true },   -- Elemental: Skyfury
+    [263] = { [462854] = true },   -- Enhancement: Skyfury
     -- Druid
     [105] = { [1126] = true },     -- Restoration: Mark of the Wild
     [102] = { [1126] = true },     -- Balance: Mark of the Wild
@@ -74,6 +138,57 @@ BF.SPEC_RAID_BUFF_IDS = {
     [71]  = { [6673] = true },     -- Arms: Battle Shout
     [72]  = { [6673] = true },     -- Fury: Battle Shout
     [73]  = { [6673] = true },     -- Protection: Battle Shout
+    -- Evoker (Blessing of the Bronze, all class variants)
+    [1473] = {
+        [381732] = true,   -- Blessing of the Bronze: Death Knight
+        [381741] = true,   -- Blessing of the Bronze: Demon Hunter
+        [381746] = true,   -- Blessing of the Bronze: Druid
+        [381748] = true,   -- Blessing of the Bronze: Evoker
+        [381749] = true,   -- Blessing of the Bronze: Hunter
+        [381750] = true,   -- Blessing of the Bronze: Mage
+        [381751] = true,   -- Blessing of the Bronze: Monk
+        [381752] = true,   -- Blessing of the Bronze: Paladin
+        [381753] = true,   -- Blessing of the Bronze: Priest
+        [381754] = true,   -- Blessing of the Bronze: Rogue
+        [381756] = true,   -- Blessing of the Bronze: Shaman
+        [381757] = true,   -- Blessing of the Bronze: Warlock
+        [381758] = true,   -- Blessing of the Bronze: Warrior
+    },
+    [1468] = {
+        [381732] = true,   -- Blessing of the Bronze: Death Knight
+        [381741] = true,   -- Blessing of the Bronze: Demon Hunter
+        [381746] = true,   -- Blessing of the Bronze: Druid
+        [381748] = true,   -- Blessing of the Bronze: Evoker
+        [381749] = true,   -- Blessing of the Bronze: Hunter
+        [381750] = true,   -- Blessing of the Bronze: Mage
+        [381751] = true,   -- Blessing of the Bronze: Monk
+        [381752] = true,   -- Blessing of the Bronze: Paladin
+        [381753] = true,   -- Blessing of the Bronze: Priest
+        [381754] = true,   -- Blessing of the Bronze: Rogue
+        [381756] = true,   -- Blessing of the Bronze: Shaman
+        [381757] = true,   -- Blessing of the Bronze: Warlock
+        [381758] = true,   -- Blessing of the Bronze: Warrior
+    },
+    -- v59 FIX: this key was a SECOND [1473], so Lua's table constructor
+    -- silently kept only the last one and DEVASTATION (1467) had no entry
+    -- at all. A Devastation Evoker's Blessing of the Bronze therefore
+    -- never matched ShouldFilterBuff, so "Show Long-Term Buffs Out of
+    -- Combat (Raid Buffs)" did nothing for them.
+    [1467] = {
+        [381732] = true,   -- Blessing of the Bronze: Death Knight
+        [381741] = true,   -- Blessing of the Bronze: Demon Hunter
+        [381746] = true,   -- Blessing of the Bronze: Druid
+        [381748] = true,   -- Blessing of the Bronze: Evoker
+        [381749] = true,   -- Blessing of the Bronze: Hunter
+        [381750] = true,   -- Blessing of the Bronze: Mage
+        [381751] = true,   -- Blessing of the Bronze: Monk
+        [381752] = true,   -- Blessing of the Bronze: Paladin
+        [381753] = true,   -- Blessing of the Bronze: Priest
+        [381754] = true,   -- Blessing of the Bronze: Rogue
+        [381756] = true,   -- Blessing of the Bronze: Shaman
+        [381757] = true,   -- Blessing of the Bronze: Warlock
+        [381758] = true,   -- Blessing of the Bronze: Warrior
+    },
     -- Mage
     [62]  = { [1459] = true },     -- Arcane: Arcane Intellect
     [63]  = { [1459] = true },     -- Fire: Arcane Intellect
@@ -140,6 +255,36 @@ BF.SPEC_SPELLS = {
         { id = 439530,   name = "Symbiotic Blooms", untracked = true },
         { id = 48438,    name = "Wild Growth"      },
     },
+    [270] = {
+        { id = 124682,   name = "Enveloping Mist"   },
+        { id = 119611,   name = "Renewing Mist"     },
+        { id = 115175,   name = "Soothing Mist"     },
+        { id = 450769,   name = "Aspect of Harmony", untracked = true },
+    },
+    [1473] = {
+        { id = 360827,   name = "Blistering Scales"  },
+        { id = 395152,   name = "Ebon Might"         },
+        { id = 410263,   name = "Inferno's Blessing" },
+        { id = 410089,   name = "Prescience"         },
+        { id = 413984,   name = "Shifting Sands"     },
+        { id = 410686,   name = "Symbiotic Bloom"    },
+        { id = 369459,   name = "Source of Magic", untracked = true },
+        -- class: absent from the SpellSearch buff dataset (ns.SpellData.BYID)
+        -- that normally supplies the class token for list coloring — stated
+        -- here explicitly instead (classColorSpellName falls back to the
+        -- curated row's own class). v70: plain spell-ID row (was a 12.0.7-era
+        -- "secret detection" entry; on 12.1 it matches by ID like any aura).
+        { id = 361022,   name = "Sense Power", class = "EVOKER" },
+    },
+    [1468] = {
+        { id = 355941,   name = "Dream Breath"      },
+        { id = 363502,   name = "Dream Flight"      },
+        { id = 364343,   name = "Echo"              },
+        { id = 376788,   name = "Echo Dream Breath" },
+        { id = 367364,   name = "Echo Reversion"    },
+        { id = 373267,   name = "Lifebind"          },
+        { id = 366155,   name = "Reversion"         },
+    },
     [264] = {
         { id = 974,      name = "Earth Shield"       },
         { id = 383648,   name = "Earth Shield (Self)" },
@@ -154,14 +299,21 @@ BF.SPEC_SPELLS = {
 -- Some spells share a name with another spell in the same list, so the name
 -- the game returns cannot tell them apart.
 --
--- Restoration Shaman's self-cast Earth Shield is a SEPARATE aura with its own
--- spell ID, and the API returns the same name for both. Every list is built
--- from the API name, because that is the localized one, so this overrides
--- only where the API is ambiguous.
+-- Preservation Evoker's Echo duplicates a HoT as a SEPARATE aura with its own
+-- spell ID -- and C_Spell.GetSpellName returns the BASE spell's name for it.
+-- So "Dream Breath" appears twice in the Single Buffs list with nothing to
+-- distinguish the copies, and the same for Reversion.
+--
+-- The curated table above already carries distinguishing names ("Echo Dream
+-- Breath"), but every list is built from the API name, because that is the
+-- localized one. This overrides only where the API is ambiguous, in the
+-- "<base> (Echo)" form so the two sort together and read as a pair.
 --
 -- Add an entry here whenever two curated spells collide on name; nothing else
 -- needs changing.
 BF.SPELL_DISPLAY_NAME_OVERRIDES = {
+    [376788] = "Dream Breath (Echo)",   -- Echo copy of 355941 Dream Breath
+    [367364] = "Reversion (Echo)",      -- Echo copy of 366155 Reversion
     [383648] = "Earth Shield (Self)",   -- self-cast copy of 974 Earth Shield
 }
 

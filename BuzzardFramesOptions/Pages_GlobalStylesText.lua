@@ -40,6 +40,7 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The fan-out, resolved at the moment it is used. `BuzzardFramesOptions:GS()`
 -- builds it on first call and memoises it; calling it from inside a getter
@@ -163,6 +164,11 @@ local function GroupLabels()
     if bf then bf:UpdateGroupLabels() end
 end
 
+local function VehicleUpdate()
+    ForEachFrame(function(bf, f)
+        if bf.UpdateVehicle then bf:UpdateVehicle(f) end
+    end)
+end
 
 -- ── Option lists ───────────────────────────────────────────────
 
@@ -380,14 +386,15 @@ end
 --
 -- Published so Panel.lua builds the route children from the same list
 -- that builds the pages. The order is the Ace tab order (names 1,
--- healthText 2, statusText 2.5, levelText 2.7, groupLabels 3) and the
--- titles are the Ace names verbatim.
+-- healthText 2, statusText 2.5, levelText 2.7, groupLabels 3,
+-- vehicleName 4) and the titles are the Ace names verbatim.
 BuzzardFramesOptions.GS_TEXT_SUBTABS = {
     { id = "names",       title = "Names" },
     { id = "healthText",  title = "Health Text" },
     { id = "statusText",  title = "Status Text" },
     { id = "levelText",   title = "Level Text" },
     { id = "groupLabels", title = "Raid Group Labels" },
+    { id = "vehicleName", title = "Vehicle Name Text" },
 }
 
 local PAGES = {}
@@ -426,11 +433,23 @@ function PAGES.names()
                       .. "Names when enabled.",
                   hidden = function() return TVal("classColorNames") end }),
         }},
-        { title = "Capitalize Names", preset = "form", fields = {
-            Sw("capitalizeNames", "Capitalize Names",
-                "textNames", NamesRefresh, nil,
-                { desc = "Convert unit names to uppercase." }),
-        }},
+        -- Modify Names (2026-11-17, owner): same card as Text -> Names.
+        -- Built step by step: see the same card in Pages_Text.lua.
+        { title = "Modify Names", preset = "form", fields = (function()
+            local f = {
+                Sw("capitalizeNames", "Capitalize Names",
+                    "textNames", NamesRefresh, nil,
+                    { desc = "Convert unit names to uppercase." }),
+            }
+            if ForeverUI() then f[#f + 1] = Sw("showLastName", "Show Last Name", "textNames", NamesRefresh, PreviewName, { desc = ForeverUI().SHOW_LAST_NAME_DESC }) end -- [FOREVER] before Abbreviate, same row, Forever only
+            f[#f + 1] = Sw("abbreviateNames", "Abbreviate Names",
+                "textNames", NamesRefresh, PreviewName,
+                { desc = "Shorten names longer than Max Name Length." })
+            f[#f + 1] = Sl("maxNameChars", "Max Name Length", 3, 20,
+                "textNames", NamesRefresh, PreviewName,
+                { hidden = function() return not TVal("abbreviateNames") end })
+            return f
+        end)() },
     }
 end
 
@@ -643,6 +662,36 @@ function PAGES.groupLabels()
                 "textGroupLabels", GroupLabels, nil),
             Sl("groupLabelFontSize", "Font Size", 6, 30,
                 "textGroupLabels", GroupLabels, nil),
+        }},
+    }
+end
+
+-- Vehicle Name Text. Ace order: vehicleNameHeader (the tab title),
+-- showVehicleName (2), vehicleNamePosition (3), vehicleFontGroup (5.5).
+function PAGES.vehicleName()
+    local noShow = function() return not TVal("showVehicleName") end
+    return {
+        { title = "Vehicle Name Text", preset = "form", fields = {
+            Sw("showVehicleName", "Show Vehicle Name",
+                "textVehicle", VehicleUpdate, nil),
+        }},
+        { title = "Vehicle Name Position", preset = "form", hidden = noShow,
+          fields = {
+            Pos({ point = AnchorSub("vehicleNamePosition", "point",
+                                    "textLayout", LayoutRefresh),
+                  x     = AnchorSub("vehicleNamePosition", "x",
+                                    "textLayout", LayoutRefresh),
+                  y     = AnchorSub("vehicleNamePosition", "y",
+                                    "textLayout", LayoutRefresh) }),
+        }},
+        { title = "Vehicle Name Font", preset = "form", hidden = noShow,
+          toggle = Gate("adjustVehicleFont", "Adjust Vehicle Font", nil,
+              "textLayout", LayoutRefresh, nil),
+          fields = {
+            FontDd("vehicleFont", "Font", "textLayout", LayoutRefresh),
+            Dd("vehicleFontBorder", "Font Border", FONT_BORDER_OPTIONS,
+                "textLayout", LayoutRefresh, nil),
+            Sl("vehicleFontSize", "Font Size", 6, 30, "textLayout", LayoutRefresh, nil),
         }},
     }
 end

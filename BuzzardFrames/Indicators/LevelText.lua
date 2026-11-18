@@ -21,7 +21,7 @@ local UnitExists         = UnitExists
 -- static fallback. The "or 80" guard matches oUF_Shared's pattern.
 local function GetMaxLevel()
     if GetMaxLevelForPlayerExpansion then return GetMaxLevelForPlayerExpansion() end
-    return MAX_PLAYER_LEVEL or 60
+    return MAX_PLAYER_LEVEL or 80
 end
 
 local LevelText = BF.indicatorPrototype:new("levelText")

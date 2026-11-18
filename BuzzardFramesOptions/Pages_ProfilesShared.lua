@@ -9,8 +9,8 @@
 -- report, the import committer, the export copy window, and the theme
 -- snapshot serializer. It is a port rather than a call because these are
 -- file-locals of an AceConfig builder -- nothing published them, so the
--- panel could not reach them -- and because the Ace file is deleted once
--- this section is migrated. Everything that IS published on
+-- panel could not reach them -- and the Ace file has since been
+-- removed. Everything that IS published on
 -- BuzzardFrames is called instead of copied: BF:ExportProfileString /
 -- BF:DecodeProfileString (ProfileExport.lua), BF:DeepMergeProfile,
 -- BF:RehydrateFlats, the five OnXProfileChanged handlers, and the theme
@@ -21,9 +21,8 @@
 -- AceDB (db:SetProfile + BF:DeepMergeProfile), the export include set
 -- lives in BuzzardFrames.db.global.exportIncludeModules, and the pasted
 -- string / decoded intermediate are session-transient file state, not
--- config -- exactly as in the Ace file. Both panels resolve the include
--- set through ResolveExportInclude and write the same db.global key,
--- which is what keeps the two in step while both exist.
+-- config -- exactly as in the Ace file. The include set is resolved
+-- through ResolveExportInclude, the one definition of "included".
 --
 -- NOTHING AT FILE SCOPE READS BuzzardFrames. `BF()` is called inside the
 -- functions, after the panel is open -- see the note at the top of
@@ -45,12 +44,11 @@ local function BF() return _G.BuzzardFrames end
 -- or read once at load, only follows a reload. Owner call: always offer
 -- it, rather than trying to detect which imported keys need it.
 --
--- DEFINED LAZILY, AND ONLY IF ABSENT. The Ace file still loads while both
--- panels exist and defines this dialog itself, so re-declaring it at file
--- scope would be two answers to one question -- and the later of the two
--- would win by load order, which is not a thing to decide a popup's text
--- by. Lazy also means this file touches no global table while loading, so
--- it loads under a harness that has no StaticPopupDialogs at all.
+-- DEFINED LAZILY, AND ONLY IF ABSENT. Originally because the Ace file,
+-- which also defined this dialog, still loaded alongside; that file is
+-- gone and this is now the only definition. Lazy still means this file
+-- touches no global table while loading, so it loads under a harness
+-- that has no StaticPopupDialogs at all.
 local function EnsureReloadPopup()
     local dialogs = _G.StaticPopupDialogs
     if type(dialogs) ~= "table" then return end
@@ -483,7 +481,7 @@ end
 -- lines, no caveat text.
 --   "Buff Containers"     = multi-icon custom buff containers
 --   "Buff Customizations" = Single Buff entries carrying user changes:
---                           whole-travelling single buffs plus curated
+--                           whole-traveling single buffs plus curated
 --                           diffs (empty presence markers are pristine
 --                           and deliberately NOT counted)
 --   "Debuff Containers"   = customDebuffContainers entries (these DO
@@ -553,6 +551,18 @@ local function BuildDecodeReport(decoded)
     end
     if type(decoded.IncomingCasts) == "table" then
         lines[#lines + 1] = "Incoming Casts Settings"
+    end
+
+    -- What the decoder dropped because this game cannot use it (a Retail
+    -- string on WoW Forever, or a Forever string on Retail): one plain-text
+    -- line per kind, written by BuzzardFrames' import filter.
+    local discarded = decoded._importDiscarded
+    if type(discarded) == "table" and #discarded > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Discarded (not compatible with this game):"
+        for i = 1, #discarded do
+            lines[#lines + 1] = "  " .. tostring(discarded[i])
+        end
     end
 
     return table.concat(lines, "\n")
@@ -650,6 +660,9 @@ local function DecodeImportString(data)
         -- so importing an old string cannot reintroduce legacy data. The
         -- receiving profile keeps its OWN sentinels.
         StripLegacyExportKeys(result.RaidPartyFrames, result.UnitFrames)
+        -- A pre-"!4!" string is always Retail; on Forever it gets the same
+        -- discard pass DecodeProfileString runs on the new format.
+        if bf.isForever and bf.Forever and bf.Forever.FilterDecodedImport then bf.Forever.FilterDecodedImport(result) end -- [FOREVER]
     end
 
     -- Pre-check: at least one known module must be present.
@@ -802,7 +815,7 @@ end
 -- and reported alongside the successes at the end of the loop.
 --
 -- The writer is BF:DeepMergeProfile, not a shallow key move. SetProfile
--- hands back a profile with the CURRENT defaults materialised; the merge
+-- hands back a profile with the CURRENT defaults materialized; the merge
 -- recurses string-keyed maps and only assigns leaves, so a sparse imported
 -- sub-table no longer wipes its defaulted siblings. This applies to legacy
 -- strings too -- one writer, one set of rules, for every format.
@@ -1153,7 +1166,7 @@ local function ShowThemeSnapshot()
     bf:ShowTextWindow("BuzzardFrames: Theme Snapshot",
         SerializeSnapshot(bf:BuildThemeSnapshot()), {
             status = "Buffs/Debuffs are captured per raid (flat_raid40) and party (flat_party); other sections capture the globals only. Global Options, Sorting & Filtering, Show Buffs/Show Debuffs and everything in Aura Customizations are excluded.",
-            label  = "Press CTRL-C to copy, then paste into the theme's `data` field in Options_Themes.lua",
+            label  = "Press CTRL-C to copy, then paste into the theme's `data` field in Themes.lua",
             width  = 560,
             height = 420,
         })

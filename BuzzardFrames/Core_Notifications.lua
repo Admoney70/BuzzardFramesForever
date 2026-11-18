@@ -95,7 +95,7 @@ end
 -- SEEN SET
 -- ============================================================
 -- Deliberately NOT declared in Defaults.lua. AceDB serves default sub-tables
--- through a metatable, and writing into one before it has been materialised
+-- through a metatable, and writing into one before it has been materialized
 -- can land in the shared defaults table rather than the profile. Creating it
 -- on demand here sidesteps that entirely.
 local function seenSet()

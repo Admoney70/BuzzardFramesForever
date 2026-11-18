@@ -52,6 +52,7 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- ── Defaults ───────────────────────────────────────────────────
 --
@@ -369,10 +370,14 @@ local CLASS_OPTIONS = {
     { value = "HUNTER",      text = "Hunter" },
     { value = "ROGUE",       text = "Rogue" },
     { value = "PRIEST",      text = "Priest" },
+    { value = "DEATHKNIGHT", text = "Death Knight" },
     { value = "SHAMAN",      text = "Shaman" },
     { value = "MAGE",        text = "Mage" },
     { value = "WARLOCK",     text = "Warlock" },
+    { value = "MONK",        text = "Monk" },
     { value = "DRUID",       text = "Druid" },
+    { value = "DEMONHUNTER", text = "Demon Hunter" },
+    { value = "EVOKER",      text = "Evoker" },
 }
 local ROLE_OPTIONS = {
     { value = "TANK",    text = "Tank" },
@@ -484,7 +489,7 @@ local function FlatUnitCard(flatID)
         title = title, preset = "form", fields = {
             { control = "dropdown", label = "Class",
               id = "previewUnit." .. flatID .. ".class", default = def.class,
-              options = CLASS_OPTIONS,
+              options = ForeverUI() and ForeverUI().PreviewClassOptions(CLASS_OPTIONS) or CLASS_OPTIONS, -- [FOREVER] F13
               get = function()
                   local ov = getOv()
                   return (ov and ov.class) or FlatTypeDefault(flatID).class
@@ -564,7 +569,7 @@ local function CFUnitCard(cfSlot, entry)
         title = "Custom Frame Group: " .. gName, preset = "form", fields = {
             { control = "dropdown", label = "Class",
               id = "previewUnit." .. tierKey .. ".class", default = cfDef.class,
-              options = CLASS_OPTIONS,
+              options = ForeverUI() and ForeverUI().PreviewClassOptions(CLASS_OPTIONS) or CLASS_OPTIONS, -- [FOREVER] F13
               get = function()
                   local ov = getOv()
                   return (ov and ov.class) or cfDef.class

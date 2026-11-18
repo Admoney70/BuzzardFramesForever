@@ -29,6 +29,7 @@ local UnitHealthMax           = UnitHealthMax
 local UnitGetTotalAbsorbs     = UnitGetTotalAbsorbs
 local UnitGetTotalHealAbsorbs = UnitGetTotalHealAbsorbs
 local UnitGetDetailedHealPrediction = UnitGetDetailedHealPrediction
+local select                  = select
 local issecretvalue = issecretvalue or function() return false end
 
 -- ============================================================
@@ -527,7 +528,10 @@ function AbsorbBars:_UpdateHealPrediction(parent, unit)
 	local maxHealth = UnitHealthMax(unit)
 	BF.HealthCalc:SetIncomingHealClampMode(anchor == "LEFT" and 1 or 0)
 	UnitGetDetailedHealPrediction(unit, "player", BF.HealthCalc)
-	local _, incomingHeals = BF.HealthCalc:GetIncomingHeals()
+	-- select() picks the configured return; the parentheses keep exactly one
+	-- value so nothing spills into SetValue's second (interpolation) argument.
+	-- No boolean test touches the amounts (they may be secret values).
+	local incomingHeals = (select(parent._absorbCfg_healPredIdx or 2, BF.HealthCalc:GetIncomingHeals()))
 
 	parent.healPrediction:SetMinMaxValues(0, maxHealth)
 	parent.healPrediction:SetValue(incomingHeals)
@@ -616,6 +620,11 @@ function AbsorbBars:_ApplyAbsorbStyle(parent)
 	-- the absorbs section at all).
 	parent._absorbCfg_showHealPred     = (ab and ab.showHealPrediction) and true or false
 	parent._absorbCfg_healPredAnchor   = ab and ab.healPredictionAnchor or "RIGHT"
+	-- Which GetIncomingHeals() return the bar shows: 1 = all units, 2 = from
+	-- the player ("me", the default), 3 = from everyone else. Resolved here,
+	-- on layout / settings change only, never per heal event.
+	local healSrc = ab and ab.healPredictionSource
+	parent._absorbCfg_healPredIdx      = (healSrc == "all" and 1) or (healSrc == "others" and 3) or 2
 	parent._absorbCfg_showHealAbsorb   = (ab and ab.showHealAbsorb) and true or false
 	parent._absorbCfg_healAbsorbStyle  = ab and ab.healAbsorbStyle or "Overlay"
 	-- Stamp the style generation consumed by Update's gate.

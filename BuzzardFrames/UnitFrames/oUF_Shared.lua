@@ -1593,6 +1593,17 @@ local function BuildClassPowerWidget(frame)
     end
 
     cp.PostVisibility = function(self, isVisible)
+        -- Drop the cache when ClassPower turns off (spec swap to a spec with
+        -- no pip resource, e.g. Windwalker -> Mistweaver). oUF does not report
+        -- the disable through PostUpdate: Visibility clears STATE.powerType
+        -- BEFORE ClassPowerDisable, whose Path call then returns at Update's
+        -- `not powerType` guard. Left alone, the old spec's values survived,
+        -- and the next ApplyOUFResourceBarLayout (any player-frame relayout --
+        -- the spec change itself triggers one) re-showed the old bar.
+        if not isVisible then
+            local host = self.__owner or frame
+            host._bf_cpCur, host._bf_cpMax, host._bf_cpPowerType = nil, nil, nil
+        end
         BF:UpdateOUFResourceBarVisibility(isVisible)
     end
 
@@ -1609,6 +1620,11 @@ function BF:GetOUFClassPowerState(host)
     if not (host.IsElementEnabled and host:IsElementEnabled("ClassPower")) then
         return nil
     end
+    -- IsElementEnabled stays true while oUF has ClassPower switched off
+    -- internally (no pip resource for this spec); the cached power type is
+    -- the only signal that it is actually reporting. PostVisibility(false)
+    -- clears it.
+    if host._bf_cpPowerType == nil then return nil end
     return true, host._bf_cpCur, host._bf_cpMax, host._bf_cpPowerType
 end
 
@@ -1738,10 +1754,6 @@ local function BluzzardStyle(self, unit)
     -- Set an initial color so the bar is never white before oUF's first color pass
     Power:SetStatusBarColor(0.00, 0.44, 1.00)
     Power.colorPower = false  -- we manage color entirely in PostUpdate via _GetOUFPowerColor
-    -- Forever: UNIT_POWER_UPDATE only fires on the server's regen ticks, so
-    -- energy/mana stepped in ~2s jumps. UNIT_POWER_FREQUENT (what the detached
-    -- bar already uses) fires on every client-side change.
-    Power.frequentUpdates = true
 
     local powerBg = BF.Texture(Power, nil, "BACKGROUND")
     powerBg:SetAllPoints(Power)
@@ -2248,7 +2260,7 @@ local function BluzzardStyle(self, unit)
     -- Aura elements (12.1 AuraContainer rewrite, oUF PR #870):
     -- Blizzard-owned AuraContainers created via the oUF meta function
     -- self:CreateAuras(). The container handles UNIT_AURA, layout, sorting,
-    -- filtering, cooldowns, tooltips and cancelling natively (C-side).
+    -- filtering, cooldowns, tooltips and canceling natively (C-side).
     -- IMPORTANT: group/button options are FROZEN at AddGroup time —
     -- everything read from the profile here requires a /reload to change
     -- (the options UI prompts for it). Live at layout time: anchoring,
@@ -2643,7 +2655,7 @@ local function BluzzardStyle(self, unit)
                     -- Master Name-Bar-Text switch gates Level visibility.
                     local showLevel = (uf2.showNameBarText ~= false) and (uf2.showLevel ~= false)
                     if showLevel and uf2.hideLevelAtMax and ufKey == "player" then
-                        local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 60
+                        local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 80
                         if level and level >= maxLevel then showLevel = false end
                     end
                     frame.Level:SetShown(showLevel)
@@ -3396,7 +3408,7 @@ function BF:_ApplyOUFNameBarTextPositions(frame, unitKey)
         local show = nameTextMaster and (uf.showLevel ~= false)
         -- Hide at max level (player frame only)
         if show and uf.hideLevelAtMax and unitKey == "player" then
-            local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 60
+            local maxLevel = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or MAX_PLAYER_LEVEL or 80
             local playerLevel = UnitLevel("player")
             if playerLevel and playerLevel >= maxLevel then
                 show = false
@@ -5039,6 +5051,10 @@ local _classIconCoords = {
     PRIEST        = { 0.5,  0.75,  0.25, 0.5   },
     WARLOCK       = { 0.75, 1.0,   0.25, 0.5   },
     PALADIN       = { 0,    0.25,  0.5,  0.75  },
+    DEATHKNIGHT   = { 0.25, 0.5,   0.5,  0.75  },
+    MONK          = { 0.5,  0.75,  0.5,  0.75  },
+    DEMONHUNTER   = { 0.75, 1.0,   0.5,  0.75  },
+    EVOKER        = { 0,    0.25,  0.75, 1.0   },
 }
 function BF:SetClassIcon(tex, className)
     if not className then return false end
@@ -5579,7 +5595,7 @@ function BF:_ComputeOUFIconInsets(f, nameH, healthH, powerH, altH)
     -- bar is off"). _AnchorOUFIconFrame centers the icon on the frame,
     -- i.e. at -(frameH/2) + iconOffsetY; ApplyOUFPlayerLayout then
     -- nudges it DOWN by altH/2 when the attached alt bar is active. This
-    -- chord math never modelled that nudge, so with the alt bar shown
+    -- chord math never modeled that nudge, so with the alt bar shown
     -- every inset was computed against an icon altH/2 higher than the
     -- one actually on screen.
     -- The health bar's inset is measured at its TOP edge (the edge
@@ -5590,7 +5606,7 @@ function BF:_ComputeOUFIconInsets(f, nameH, healthH, powerH, altH)
     -- opens: the top-left corner of the health bar's border, precisely
     -- as reported. Model the nudge here so the chord and the mask agree.
     -- KEEP IN SYNC with the nudge in ApplyOUFPlayerLayout.
-    -- v91: the `- (altH / 2)` term is GONE with the nudge it modelled. The
+    -- v91: the `- (altH / 2)` term is GONE with the nudge it modeled. The
     -- frame no longer grows for the alt bar, so the bar block does not shift
     -- downward and the icon stays centered on a fixed frame. This also removes
     -- the last reason a form change would have to touch _iconFrame, which is a

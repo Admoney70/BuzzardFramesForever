@@ -7,6 +7,7 @@
 -- Extracted from Core.lua in the Core split refactor.
 -- ============================================================
 local BF = _G["BuzzardFrames"]
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 -- ============================================================
 -- UNIT FRAME LAYOUT SYSTEM
@@ -206,6 +207,16 @@ function BF:ApplyUFRoleSpecLayout(silent)
     local specIDStr = specID and tostring(specID)
 
     local newID
+
+    -- [FOREVER] begin
+    -- Forever: a Class layout takes the Spec layout's place (Class -> Role
+    -- -> Global); the spec step below is skipped so ufSpecLayouts is never
+    -- read. Solo role behavior: see Forever/Forever_ClassOverrides.lua.
+    if IS_FOREVER then
+        specIDStr = nil
+        newID = BF.Forever.ResolveUFClassLayout(p)
+    end
+    -- [FOREVER] end
 
     -- Spec-specific layout takes priority
     -- An entry with NO assignment is "use the global setting": it is in the

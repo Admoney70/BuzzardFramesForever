@@ -58,18 +58,89 @@ local function NotifyOptions(self)
     if self.RefreshPanel then self:RefreshPanel("profile") end
 end
 
--- BuzzardFrames profiles are global, not character-specific. AceDB's
--- SetProfile only updates profileKeys[currentCharKey], which creates
--- per-character divergence if the user switches profiles on one toon
--- and then logs into another. SyncProfileKeysGlobal fixes this by
--- updating every entry in db.sv.profileKeys to the current profile
--- name after any profile switch. The next character to log in will
--- find their profileKey already pointing at the correct profile.
+-- Each module's profile is either GLOBAL (the default) or CHARACTER-
+-- SPECIFIC, chosen per module by the "Character-specific" switch on the
+-- Profiles > General page and stored account-wide in that module DB's
+-- own global section (db.global.characterSpecific).
+--
+-- Global: AceDB's SetProfile only updates profileKeys[currentCharKey],
+-- which creates per-character divergence if the user switches profiles
+-- on one toon and then logs into another. SyncProfileKeysGlobal fixes
+-- this by updating every entry in db.sv.profileKeys to the current
+-- profile name after any profile switch. Rewriting profileKeys alone is
+-- NOT enough: it only reaches characters that already HAVE an entry. A
+-- character with no entry (a new one, or one that has not logged in
+-- since the module DBs were created) is put on AceDB's defaultProfile,
+-- "Default", at :New() time. So the active name is also saved
+-- account-wide (db.global.activeProfile), and BF:RestoreGlobalProfile
+-- applies it at login. That saved name is the source of truth.
+--
+-- Character-specific: plain AceDB behavior -- a switch changes only the
+-- current character -- except that a character with no entry yet starts
+-- on db.global.defaultProfile (the "Default <Module> Profile" dropdown).
 local function SyncProfileKeysGlobal(db)
-    if not db or not db.sv or not db.sv.profileKeys then return end
+    if not db or not db.sv then return end
+    if db.global.characterSpecific then return end
     local current = db:GetCurrentProfile()
+    db.global.activeProfile = current
+    if not db.sv.profileKeys then return end
     for charKey in pairs(db.sv.profileKeys) do
         db.sv.profileKeys[charKey] = current
+    end
+end
+
+-- Called from RegisterDB (Core_DB.lua) right after the module DBs are
+-- created, BEFORE any profile callback is registered, so the SetProfile
+-- below fires no refresh work. `hadEntry` says whether this character
+-- had a profileKeys entry BEFORE AceDB:New ran -- :New writes one, so it
+-- can only be read beforehand.
+--
+-- Global: switches this character onto the saved account-wide profile
+-- when it differs, then re-syncs every character's entry. Does nothing
+-- until a name has been saved: on an install that predates the saved
+-- name, per-character entries may disagree and there is no safe way to
+-- pick one (owner ruling 2026-10-01), so the first profile switch after
+-- the update is what establishes it.
+--
+-- Character-specific: only a character with no prior entry is moved,
+-- onto the module's default profile for new characters.
+function BF:RestoreGlobalProfile(db, hadEntry)
+    if not db or not db.sv then return end
+    local g = db.global
+    local name
+    if g.characterSpecific then
+        if hadEntry then return end
+        name = g.defaultProfile
+    else
+        name = g.activeProfile
+    end
+    if type(name) ~= "string" then return end
+    local profiles = db.sv.profiles
+    if not (profiles and profiles[name]) then return end
+    if name ~= db:GetCurrentProfile() then
+        db:SetProfile(name)
+    end
+    SyncProfileKeysGlobal(db)
+end
+
+-- The "Character-specific" switch's setter (Profiles > General).
+-- Turning it ON switches nothing; it seeds the default for new
+-- characters with the current profile when no valid one is stored.
+-- Turning it OFF makes the current character's profile the one every
+-- character uses.
+function BF:SetModuleCharacterSpecific(db, on)
+    if not db or not db.sv then return end
+    local g = db.global
+    if on then
+        g.characterSpecific = true
+        local profiles = db.sv.profiles
+        local def = g.defaultProfile
+        if type(def) ~= "string" or not (profiles and profiles[def]) then
+            g.defaultProfile = db:GetCurrentProfile()
+        end
+    else
+        g.characterSpecific = nil
+        SyncProfileKeysGlobal(db)
     end
 end
 
@@ -204,7 +275,8 @@ function BF:OnUFProfileChanged()
     -- db:SetProfile (against the still-empty profile, where the comparison is
     -- outgoing-profile vs DEFAULTS and therefore meaningless: it is why an
     -- import that changed a reload-sensitive key never prompted) and once from
-    -- the post-merge resync in Options_Profiles.lua. Neither pass prompts or
+    -- the post-merge resync in BuzzardFramesOptions/Pages_ProfilesShared.lua
+    -- (ImportDecodedProfile). Neither pass prompts or
     -- consumes the snapshot: the import path always shows its own reload popup
     -- when it finishes, and clears the snapshot itself.
     local snap = (not self._importPendingMerge) and self._ufReloadSnapshot or nil

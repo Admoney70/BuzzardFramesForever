@@ -10,6 +10,7 @@
 --           re-parented to UIParent.
 -- ============================================================
 local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 local format = string.format
 local UnitPower = UnitPower
@@ -190,6 +191,7 @@ function BF:IsAltPowerBarEligible()
     if p.altPowerBarDetached then return false end
     local _, playerClass = UnitClass("player")
     if playerClass ~= "DRUID" then return false end
+    if IS_FOREVER then return true end -- [FOREVER] no specs: "Enable Alt Power Bar" alone decides
     local specIdx = GetSpecialization()
     local specKey = specIdx and DRUID_SPEC_KEYS[specIdx]
     local druidSpecs = p.altPowerBarDruidSpecs
@@ -744,7 +746,8 @@ function BF:UpdateOUFAltPowerBar()
     -- AND the current spec is toggled on in altPowerBarDruidSpecs.
     local altActive = false
     local _, playerClass = UnitClass("player")
-    if playerClass == "DRUID" and UnitPowerType("player") ~= 0 then
+    if IS_FOREVER and playerClass == "DRUID" and UnitPowerType("player") ~= 0 then altActive = true end -- [FOREVER] no specs: "Enable Alt Power Bar" alone decides
+    if playerClass == "DRUID" and UnitPowerType("player") ~= 0 and not IS_FOREVER then -- [FOREVER] Retail-only spec check below
         local specIdx = GetSpecialization()
         -- PERF: file-local DRUID_SPEC_KEYS (defined above) — the inline table
         -- literal here allocated 20-40 tables/sec while in form.

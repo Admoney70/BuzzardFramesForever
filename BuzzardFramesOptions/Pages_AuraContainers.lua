@@ -51,6 +51,8 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- FORWARD-DECLARED: defined with the Buff List further down, used by the
 -- container routes above them (a container's Assigned Spells subtab IS a
@@ -140,6 +142,9 @@ local function SingleBuffAnchorOptions()
     end
     return out
 end
+-- The Bar tab (Pages_SingleBuffVisuals.lua) offers the same list for the
+-- entry's bar, so the two anchor dropdowns cannot drift apart.
+BuzzardFramesOptions.SingleBuffAnchorOptions = SingleBuffAnchorOptions
 
 local FONT_BORDER_OPTIONS = {
     { value = "",                          text = "None" },
@@ -234,7 +239,7 @@ local function ContainerScopeKey(c)
 end
 
 -- The table an edit MUTATES: the per-scope copy when the per-Layout tier is
--- active, else the container itself. Materialises the per-scope table on
+-- active, else the container itself. Materializes the per-scope table on
 -- demand, exactly as the Ace getEffectiveSource does -- so it is a WRITE
 -- path helper and a `hidden` predicate must never call it. (The Ace file
 -- makes the same distinction, and for the same reason.)
@@ -249,7 +254,7 @@ local function EffectiveSource(c)
 end
 
 -- The two-tier READ: the per-scope value, falling back to the container top
--- level. Read-only -- it never materialises anything.
+-- level. Read-only -- it never materializes anything.
 local function ScopeField(c, field)
     if type(c) ~= "table" then return nil end
     local key = ContainerScopeKey(c)
@@ -305,7 +310,10 @@ local function RefreshContainersLight()
     local bf = BF()
     if not bf then return end
     bf:MouseUpOption("acCustomContainers", function()
-        bf:RefreshAllCustomContainers()
+        -- true: also bring Big Defensive's line budget up to date on frames
+        -- whose Big Defensive hosts single buffs -- an anchored entry's Icon
+        -- Size / Text Area Size feeds it (BF:RefreshAllCustomContainers).
+        bf:RefreshAllCustomContainers(true)
         -- A single buff anchored to Buffs or Big Defensive is painted by the
         -- ROW assemblers, which RefreshAllCustomContainers does not walk.
         if bf.IsPreviewingBuffList and bf:IsPreviewingBuffList()
@@ -408,7 +416,7 @@ local function CopyScopeTo(c, targetID, ctx)
     for k, v in pairs(src) do
         if type(v) == "table" then dst[k] = bf:DeepCopy(v) else dst[k] = v end
     end
-    -- Materialised here rather than assumed: the source no longer has to
+    -- Materialized here rather than assumed: the source no longer has to
     -- exist, so neither does the table it would have lived in.
     if not c.groupSettings then c.groupSettings = {} end
     c.groupSettings[targetID] = dst
@@ -705,7 +713,7 @@ end
 -- and was removed (2026-09-15, owner ruling). The container record's
 -- containerCasterScope field is untouched; only the widget is gone.
 local function AppliedByField(getC, subject)
-    return { control = "dropdown", label = "Applied By",
+    return { control = "segmented", label = "Applied By",
       desc = "Which caster's copy to show for " .. subject .. "."
           .. "\n\nMe Only: only when YOU applied it.\nNot Me: only when "
           .. "someone ELSE applied it.\nAnyone: whoever applied it.",
@@ -737,7 +745,40 @@ local function AppliedByField(getC, subject)
       end }
 end
 
+-- "Combat Status": Always / In Combat / Out of Combat, beside Applied By in a
+-- single buff's Conditions card, on both game versions. Storage:
+-- c.loadCombat = "in" | "out"; Always is the default and stores nothing. The
+-- runtime applies it on the two combat edges (the COMBAT STATUS block in
+-- BuzzardFrames/Indicators/BuffsAndContainers.lua). The preview ignores it and
+-- always shows the buff.
+local function CombatStatusField(getC, subject)
+    return { control = "segmented", label = "Combat Status",
+      desc = "When to show " .. subject .. "."
+          .. "\n\nAlways: in and out of combat.\nIn Combat: only while you "
+          .. "are in combat.\nOut of Combat: only while you are out of combat."
+          .. "\n\nThe preview always shows it.",
+      options = { { value = "always", text = "Always" },
+                  { value = "in",     text = "In Combat" },
+                  { value = "out",    text = "Out of Combat" } },
+      id = "loadCombat", default = "always",
+      disabled = "combat",
+      get = function()
+          local c = getC()
+          local m = c and c.loadCombat
+          return (m == "in" or m == "out") and m or "always"
+      end,
+      set = function(_, ctx, val)
+          if InCombatLockdown() then return end
+          local c = getC()
+          if not c then return end
+          -- "always" is the default and stores nothing (sparse convention).
+          c.loadCombat = (val == "in" or val == "out") and val or nil
+          ConditionsRefresh(ctx)
+      end }
+end
+
 local function ConditionsCards(getC, subject, onChanged)
+    if ForeverUI() then return ForeverUI().ClassConditionCards(getC, subject, onChanged, AppliedByField(getC, subject), ConditionsRefresh, CombatStatusField(getC, subject)) end -- [FOREVER]
     local function refresh(ctx)
         local bf = BF()
         if bf then bf:RefreshContainersWithRebuildDebounced() end
@@ -888,7 +929,10 @@ local function ConditionsCards(getC, subject, onChanged)
 
         specFields[#specFields + 1] = {
             control = "switch", label = ClassColored(cls, cname),
-            labelSide = "after",
+            -- Label BESIDE its switch, not above it, switch first (owner,
+            -- 2026-11-17): one line per class --
+            -- "[x] Death Knight  [x] <blood>  [x] <frost>".
+            labelPlacement = "left", labelSide = "after",
             -- A FIXED COLUMN, as the Ace toggle had (width 0.9 -> 153px):
             -- sized to the class name, not to each class's own name, so
             -- every row's specs start at the same x. Without it the icons
@@ -929,12 +973,14 @@ local function ConditionsCards(getC, subject, onChanged)
             local id   = s.id
             local icon = s.icon and (s.icon:gsub("\\", "/")) or nil
             specFields[#specFields + 1] = {
-                control = "switch", labelSide = "after",
+                control = "switch", labelPlacement = "left", labelSide = "after",
                 -- The spec column: Ace's width 0.3 -> 51px, which is the
                 -- switch, its icon and a little air -- two more here for
                 -- the 16px icon. Fixed for the same reason the class
-                -- column is.
-                cellWidth = 54,
+                -- column is. 2026-11-17: 62 with the label beside the
+                -- switch -- the icon's label allowance (16 + 10) plus the
+                -- switch and the 8px label gap.
+                cellWidth = 62,
                 -- Icon only; the name moves into the tooltip. The class is
                 -- spelled out because six spec names are shared between
                 -- classes and color alone does not separate them.
@@ -967,8 +1013,10 @@ local function ConditionsCards(getC, subject, onChanged)
     return {
         { title = "Conditions", preset = "form", fields = {
             AppliedByField(getC, subject),
+            -- Same row as Applied By (owner, 2026-11-15).
+            CombatStatusField(getC, subject),
 
-            -- The caster-scope dropdown above ends its row here: this
+            -- The two fields above end their row here: this
             -- switch is a condition of its own and what follows it is that
             -- condition's list, not more fields beside it. A break says
             -- that; the Ace page's width = "full" said it by making a
@@ -2050,7 +2098,7 @@ local function ContainerCards(kind, getC)
             -- ONLY these two glow styles, by design: every other one is
             -- OnUpdate-driven, and SetScript is refused on engine-owned aura
             -- buttons and their descendants. Do not expose dead options.
-            { control = "dropdown", label = "Glow Style",
+            { control = "segmented", label = "Glow Style",
               desc = "Steady draws the ring at a constant strength; Pulsing "
                   .. "fades it in and out.",
               options = { { value = "steady", text = "Steady" },
@@ -2077,7 +2125,7 @@ local function ContainerCards(kind, getC)
               desc = "A whole-frame effect shown while this container has a "
                   .. "debuff to display.\n\nDraws BELOW the Dispel Indicators' "
                   .. "matching effect. Per-spell buff frame effects sit above "
-                  .. "or below it according to their own Prioritise settings."
+                  .. "or below it according to their own Prioritize settings."
                   .. "\n\nWith more than one category in this container the "
                   .. "effect is drawn once per MATCHING category, so it looks "
                   .. "stronger while several match at once. Full alpha on the "
@@ -2205,6 +2253,7 @@ end
 -- otherwise the spec's curated list decides. Shared by the Add Buff dropdown
 -- and the Assigned Spells tree, so the two cannot disagree.
 local function ContainerSpecFilterHidesEntry(sb, sid)
+    if ForeverUI() then return ForeverUI().ContainerClassFilterHides(sb) end -- [FOREVER]
     local bf = BF()
     local f  = containerSpecFilter
     if not f or f == 0 then return false end
@@ -2426,7 +2475,7 @@ local function ContainerMemberPage(kind)
                     containerAddMode = val
                     ctx.app:RefreshPage()
                 end }
-            listFields[#listFields + 1] = {
+            listFields[#listFields + 1] = ForeverUI() and ForeverUI().ContainerClassFilterField(modeIsnt("buffList")) or { -- [FOREVER] Filter by Class in place of Filter by Spec
                 control = "dropdown", label = "Filter by Spec",
                 hidden = modeIsnt("buffList"),
                 desc = "Show only buffs whose spell is in that spec's curated "
@@ -3507,6 +3556,7 @@ end
 -- shows under exactly the specs the condition has ON; condition off, curated
 -- membership decides and an entry in no curated list appears under All only.
 local function SingleSpecFilterHides(sid, c)
+    if ForeverUI() then return ForeverUI().BuffListClassFilterHides(sid, c, singleBuffFilterExempt) end -- [FOREVER]
     local bf = BF()
     local f  = singleBuffSpecFilter
     if not f or f == 0 then return false end
@@ -3653,6 +3703,7 @@ local function AddSingleBuff(mode)
             singleBuffSpecFilterTouched = true
         end
     end
+    if ForeverUI() then ForeverUI().BuffListClassFilterOnAdd(c) end -- [FOREVER]
     -- And the same for the text search, for the same reason: adding
     -- "Rejuvenation" while the box still says "shield" would file the entry
     -- correctly and then hide it, which reads as the add having failed.
@@ -3792,8 +3843,23 @@ function SingleBuffCard(mctx)
     -- stayed on screen whichever subtab was selected. It was a field inside
     -- the first form card, which put the name below the card's own frame
     -- and level with the Display picker rather than over the whole pane.
+    -- Header fix (owner, 2026-10-14): the Enabled switch FOLLOWS the name on
+    -- the same row. `width = "fit"` sizes the note to its own words (a wide
+    -- note takes the row and pushes the switch to the next line), measured at
+    -- the size it draws at -- `fontSize` is stated, because the fit measure
+    -- uses the stated size and the heading font's own size would otherwise
+    -- be measured at the note default and wrap. The name part is capped
+    -- (NAME_MAX characters) so a long name cannot push the switch off the row.
+    local NAME_MAX = 34
+    local nameFontSize = 16
+    do
+        local fo = _G.GameFontNormalLarge
+        local _, sz = fo and fo.GetFont and fo:GetFont()
+        if type(sz) == "number" and sz > 0 then nameFontSize = math.floor(sz + 0.5) end
+    end
     local nameHeader = {
-        { control = "note", wide = true, font = "GameFontNormalLarge",
+        { control = "note", width = "fit", font = "GameFontNormalLarge",
+          fontSize = nameFontSize,
           color = { 1, 1, 1, 1 }, text = function()
             local bf = BF()
             local c  = getC()
@@ -3830,6 +3896,16 @@ function SingleBuffCard(mctx)
                 end
             end
             if not nm then return "|cffaaaaaa(No spell assigned)|r" end
+            -- Counted in CHARACTERS, cut on a character boundary (names
+            -- are UTF-8; a byte cut can split a letter).
+            do
+                local n, cut = 0, nil
+                for pos in nm:gmatch("()[%z\1-\127\194-\244][\128-\191]*") do
+                    n = n + 1
+                    if n == NAME_MAX - 2 then cut = pos end
+                end
+                if n > NAME_MAX and cut then nm = nm:sub(1, cut - 1) .. "..." end
+            end
 
             local tex = s and ((bf.CuratedSpellIcon and bf.CuratedSpellIcon(s))
                 or (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(s)))
@@ -3859,16 +3935,15 @@ function SingleBuffCard(mctx)
     -- BOTH KEYS ARE THE EXISTING ONES: `singleBuffHidden` (Blacklist) and
     -- `singleBuffCustomized` (nil = customized, false = default), so nothing
     -- migrates and SingleBuffDisplayType still answers for the subtab gates.
-    -- The card's GATE: whether the buff shows at all. In the header rather
-    -- than as a field, for the reason every other master switch in the panel
-    -- is -- what is under it only means anything while it is on, and a card
-    -- that collapses to its header says that more plainly than a field that
-    -- grays out. Off IS the blacklist: it writes the same singleBuffHidden
+    -- Whether the buff shows at all. Display-tab redesign (owner,
+    -- 2026-10-14): the ENTRY HEADER's "Enabled" switch, directly under the
+    -- name and ID (it replaced the old Show Buff card's gate; same id, same
+    -- get/set). Off IS the blacklist: it writes the same singleBuffHidden
     -- the old Blacklist option did, so the entry moves to the Blacklist
     -- section of the list.
     local displayToggle = {
         id = "singleBuffShow", default = true,
-        tooltip = "Show Buff",
+        tooltip = "Enabled",
         desc = "When off, this buff never shows and moves to the Blacklist "
             .. "section of the list.",
         get = function() return SingleBuffDisplayType(getC()) ~= "hide" end,
@@ -3897,13 +3972,16 @@ function SingleBuffCard(mctx)
 
     local displayFields = {
         { control = "switch", label = "Customize Buff", labelSide = "after",
-          desc = "When enabled, this buff also applies the Icon, Icon Effects, "
-              .. "Cooldown Text and Frame Effects configured on this entry. "
-              .. "When disabled, it shows using the container's own settings "
-              .. "only.",
-          -- No blacklist gate of its own: the card it sits in collapses to
-          -- its header when Show Buff is off, so this is never on screen for
-          -- a buff that cannot show.
+          -- Display-tab redesign: Customize Buff applies ONLY to the icon.
+          -- The bar, the text in place of the icon and the frame effects are
+          -- customizations of their own, each with its own Display-tab switch.
+          desc = "When enabled, this buff's icon uses the Icon, Icon Effects "
+              .. "and Cooldown Text configured on this entry. When disabled, "
+              .. "the icon looks like any other buff of the display it is in. "
+              .. "Its bar, text in place of the icon and frame effects do not "
+              .. "depend on this.",
+          -- No blacklist gate of its own: every Display-tab card hides while
+          -- the entry is not Enabled (see the tab's assembly below).
           id = "singleBuffCustomize", default = true, disabled = "combat",
           get = function()
               local c = getC()
@@ -3928,9 +4006,10 @@ function SingleBuffCard(mctx)
           end },
     }
 
-    -- "Enabled for this Layout" stays with Position, as it did in the Ace
-    -- entry: it is a per-Layout setting, and settings go below the scope
-    -- strip rather than above it.
+    -- "Enabled for this Layout" is NOT a position setting (owner): it sits in
+    -- the ENTRY HEADER, directly below the per-Layout switch it qualifies
+    -- (Display-tab redesign), for every entry. The field itself (storage,
+    -- setter, refresh) is unchanged.
     local mainFields = {
         -- The shared "Enabled for this Layout" widget, relabeled rather than
         -- redefined: its storage (groupSettings[<scope>].showForGroupType) is
@@ -3940,7 +4019,7 @@ function SingleBuffCard(mctx)
           labelSide = "after",
           desc = "When disabled, this buff will not appear on frames of the "
               .. "Layout or Custom Frame Group you are currently editing. It "
-              .. "stays in the list either way; use Display above to "
+              .. "stays in the list either way; turn off Enabled to "
               .. "blacklist it everywhere.",
           id = "showForGroupType", default = true, disabled = "combat",
           hidden = function() return scopeKey() == nil end,
@@ -3965,28 +4044,44 @@ function SingleBuffCard(mctx)
               ctx.app:RefreshPage()
           end },
     }
-
+    -- THE ENTRY HEADER (Display-tab redesign), above the subtab strip:
+    --   1. name and ID;  2. Enabled (directly after them);
+    --   3. the per-Layout config strip, with Enabled for this Layout on
+    --      its own row INSIDE the strip, directly under Enable per-Layout
+    --      Config (owner, 2026-10-14).
+    -- After the name, on its row: label beside the switch (the bare preset
+    -- puts labels ABOVE controls; `left` + `after` is "[switch] Enabled").
+    nameHeader[#nameHeader + 1] = {
+        control = "switch", label = "Enabled", labelSide = "after",
+        labelPlacement = "left",
+        desc = displayToggle.desc,
+        id = displayToggle.id, default = displayToggle.default, disabled = "combat",
+        get = displayToggle.get, set = displayToggle.set,
+    }
     header[#header + 1] = { preset = "bare", fields = nameHeader }
     -- `flush = 2`: the strip belongs to the name above it. The full gap, on
     -- top of the name card's own bottom pad, left the two reading as
     -- separate sections with a band of nothing between them.
     local scope = ScopeStrip(getC, "buff", "buff")
     scope.flush = 2
+    -- `stack`: drawn in the same cell as Enable per-Layout Config, directly
+    -- under it, the two switches centered as a pair on the strip's row
+    -- beside the two dropdowns (owner, 2026-10-14). Hidden (with the
+    -- dropdowns) while per-Layout is off, and the lone switch then sits
+    -- where it always did.
+    for i, f in ipairs(mainFields) do
+        f.stack = true
+        table.insert(scope.fields, 1 + i, f)
+    end
     header[#header + 1] = scope
 
-    -- FIRST CARD OF THE DISPLAY TAB: what this entry is, above the position
-    -- settings it governs. A card of its own rather than fields inside the
-    -- Position card below -- neither control is a position setting, and the
-    -- Customize switch decides which of the entry's tabs exist at all.
-    position[#position + 1] = { title = "Show Buff", preset = "form",
-                                toggle = displayToggle, fields = displayFields }
-
-    -- Hidden while the buff is blacklisted: where an icon that never
-    -- renders would sit is not a question, and the card also carries
-    -- "Enabled for this Layout" and Order, which are just as moot. The Show
-    -- Buff card above stays, so the way back is always on screen.
-    position[#position + 1] = { title = "Position", preset = "form",
-      hidden = function() return SingleBuffDisplayType(getC()) == "hide" end,
+    -- ICON POSITION (Display-tab redesign: always on the Display tab, one
+    -- card). Shown while the icon or the text standing in for it is drawn,
+    -- titled "Text Position" in text mode -- both decided when the tabs are
+    -- assembled below (the switches that change them all Invalidate, which
+    -- rebuilds this page). Hidden while the buff is not Enabled, like every
+    -- other card on the tab.
+    local positionCard = { title = "Icon Position", preset = "form",
       fields = {
         { control = "dropdown", label = "Anchor Point",
           desc = "Changing the anchor point resets the Grow Direction to that "
@@ -4062,17 +4157,6 @@ function SingleBuffCard(mctx)
           set = twoTierSet("sbRelativeOrder") },
     }}
 
-    -- The layout switch goes at the TOP of Position rather than in a card
-    -- of their own above the strip. Inserted rather than
-    -- written into the literal above, so the Position card reads as one
-    -- list of position settings and this stays one decision in one place.
-    do
-        local pos = position[#position]
-        for i = #mainFields, 1, -1 do
-            table.insert(pos.fields, 1, mainFields[i])
-        end
-    end
-
     -- The Order dropdown, beside Relative Order, which is the thing it
     -- controls. NOT a new field: a single buff's Position already lives in
     -- sbVisuals.specSpellOrdering["sb"][sid], the same slot the Icon tab's
@@ -4083,7 +4167,7 @@ function SingleBuffCard(mctx)
     -- fanning one entry's Order out across every enabled spec would
     -- silently overwrite the user's curated Position on all of them.
     do
-        local pos = position[#position]
+        local pos = positionCard
         local function displaySid()
             local bf, c = BF(), getC()
             return bf and c and bf.GetSingleBuffDisplaySpellID
@@ -4141,6 +4225,11 @@ function SingleBuffCard(mctx)
                     local fam = c.sbVisuals and c.sbVisuals.specSpellOrdering
                     local map = fam and fam["sb"]
                     if map then map[sid] = nil end
+                    -- Round 3: None leaves nothing behind -- the emptied map,
+                    -- then the emptied family, go too (the Icon tab setters'
+                    -- pruneFamily rule).
+                    if map and next(map) == nil then fam["sb"] = nil end
+                    if fam and next(fam) == nil then c.sbVisuals.specSpellOrdering = nil end
                 else
                     if not c.sbVisuals then c.sbVisuals = {} end
                     local fam = c.sbVisuals.specSpellOrdering
@@ -4197,7 +4286,8 @@ function SingleBuffCard(mctx)
               local bf, c = BF(), getC()
               if not (bf and c) then return end
               EffectiveSource(c).containerUsesBuffSettings = val and true or false
-              bf:RefreshAllCustomContainers()
+              -- true: Big Defensive's line budget too (see RefreshContainersLight).
+              bf:RefreshAllCustomContainers(true)
           end },
         { control = "slider", label = "Icon Size", min = 2, max = 50, step = 1,
           id = "buffSize", disabled = "combat",
@@ -4205,6 +4295,47 @@ function SingleBuffCard(mctx)
               return ScopeField(getC(), "containerUsesBuffSettings") ~= false
           end,
           get = twoTierGet("buffSize"), set = twoTierSet("buffSize") },
+    }}
+
+    -- Text Area Size: Icon Size's twin, for an entry whose icon is off and
+    -- whose duration text stands in its place (the Display tab's "Show Text
+    -- in place of Icon" card, whose fields these are). The text area's size in the row it
+    -- flows in, and the base Auto Scale Duration Text scales from. Its OWN
+    -- pair of container fields, textAreaUsesBuffSize + textAreaSize, so
+    -- buffSize is never written here and turning the icon back on brings
+    -- back the icon's own size. Built here for the reason Icon Size is --
+    -- the two-tier helpers live here. Only its FIELDS are placed (inside the
+    -- gated Display-tab card, below); no Customize Buff needed.
+    local textAreaSize = { title = "Text Area Size", preset = "form", fields = {
+        { control = "switch", width = "full", labelSide = "after",
+          label = "|cFF87CEEBUse Buffs Icon Size|r",
+          desc = "When enabled, the text area takes its size from the Icon "
+              .. "Size of the active Buffs settings. Disable it to give it "
+              .. "its own.",
+          id = "textAreaUsesBuffSize", default = true, disabled = "combat",
+          get = function()
+              return ScopeField(getC(), "textAreaUsesBuffSize") ~= false
+          end,
+          set = function(_, _, val)
+              if InCombatLockdown() then return end
+              local bf, c = BF(), getC()
+              if not (bf and c) then return end
+              EffectiveSource(c).textAreaUsesBuffSize = val and true or false
+              -- true: Big Defensive's line budget too (see RefreshContainersLight).
+              bf:RefreshAllCustomContainers(true)
+          end },
+        -- Unset until first touched, so it shows -- and the render side is
+        -- to resolve -- the entry's own Icon Size until then.
+        { control = "slider", label = "Text Area Size", min = 2, max = 50, step = 1,
+          id = "textAreaSize", disabled = "combat",
+          hidden = function()
+              return ScopeField(getC(), "textAreaUsesBuffSize") ~= false
+          end,
+          get = function()
+              local c = getC()
+              return ScopeField(c, "textAreaSize") or ScopeField(c, "buffSize") or 12
+          end,
+          set = twoTierSet("textAreaSize") },
     }}
 
     -- NO Remove BUTTON. The Ace page had removeSingleBuff at the bottom of
@@ -4217,11 +4348,14 @@ function SingleBuffCard(mctx)
     -- ── The entry's remaining tabs ─────────────────────────────
     --
     -- The six Ace subtabs are Position | Icon | Icon Effects | Cooldown
-    -- Text | Frame Effects | Conditions. Position and Conditions are built
-    -- here; the four VISUAL tabs come from Pages_SingleBuffVisuals.lua
-    -- against the entry's own sbVisuals store, and exist only for a
-    -- Customized entry (see the collection's memberTabs, which is where
-    -- the routes are minted and the gates applied).
+    -- Text | Frame Effects | Conditions, and Bar sits between Icon Effects
+    -- and Cooldown Text. Position and Conditions are built
+    -- here; the five VISUAL tabs come from Pages_SingleBuffVisuals.lua
+    -- against the entry's own sbVisuals store, and exist per the Display-tab
+    -- switches (see the collection's memberTabs, which is where the routes
+    -- are minted and the gates applied). Display-tab redesign order:
+    -- Display | Icon | Icon Effects | Cooldown Text | Bar | Frame Effects |
+    -- Conditions.
     local sid = (function()
         local bf, c = BF(), getC()
         return bf and c and bf.GetSingleBuffDisplaySpellID
@@ -4229,10 +4363,125 @@ function SingleBuffCard(mctx)
     end)()
     local visuals = sid and BuzzardFramesOptions.SingleBuffVisualTabs
                     and BuzzardFramesOptions:SingleBuffVisualTabs(getC, sid)
-                    or { icon = {}, iconEffects = {}, cooldownText = {}, frameEffects = {} }
+                    or { icon = {}, iconEffects = {}, cooldownText = {}, bar = {},
+                         frameEffects = {} }
+    -- Icon Size follows the entry's Show Icon (the Icon tab only exists
+    -- while it is on anyway).
+    --
+    -- The Icon tab exists whenever Show Buff Icon is on (owner, 2026-10-14),
+    -- Customize Buff or not. Its styling -- Buff Icon, Icon Color, Icon
+    -- Border, Icon Size -- applies only to a CUSTOMIZED entry (the engine's
+    -- SBRoot is nil otherwise, and the size resolver forces the display's
+    -- own size), so those cards hide while Customize Buff is off and the
+    -- tab shows only Icon Position. Customize Buff's setter Invalidates and
+    -- re-renders, which re-asks every one of these.
+    local function notCustomized()
+        local c = getC()
+        return c ~= nil and c.singleBuffCustomized == false
+    end
+    local function orNotCustomized(own)
+        return function(...)
+            if notCustomized() then return true end
+            if type(own) == "function" then return own(...) and true or false end
+            return own == true
+        end
+    end
+    iconSize.hidden = orNotCustomized(visuals.iconHidden)
+    -- Icon Position: on the Icon tab, directly below Buff Icon (owner,
+    -- 2026-10-14). The tab only exists while the icon is shown, so the card
+    -- needs no gate of its own here. "Text Position" -- the same card for
+    -- an entry whose text stands in the icon's place -- stays on the
+    -- Display tab, since there is no Icon tab then (built below).
+    positionCard.title = "Icon Position"
     local iconTab = {}
-    for _, g in ipairs(visuals.icon) do iconTab[#iconTab + 1] = g end
+    local placedPosition = false
+    for _, g in ipairs(visuals.icon) do
+        g.hidden = orNotCustomized(g.hidden)
+        iconTab[#iconTab + 1] = g
+        if not placedPosition and g.title == "Buff Icon" then
+            iconTab[#iconTab + 1] = positionCard
+            placedPosition = true
+        end
+    end
+    -- No Buff Icon card (no spell resolved yet): the position still leads.
+    if not placedPosition then table.insert(iconTab, 1, positionCard) end
     iconTab[#iconTab + 1] = iconSize
+    local cooldownTextTab = {}
+    for _, g in ipairs(visuals.cooldownText) do
+        cooldownTextTab[#cooldownTextTab + 1] = g
+    end
+
+    -- ── THE DISPLAY TAB (Display-tab redesign, owner 2026-10-14) ──
+    --   1. Show Buff Icon  [gate: Show Icon]   Customize Buff, Show Cooldown Text
+    --   2. Show Text in place of Icon [gate]   Text Area Size   (icon off only)
+    --   3. Text Position                       (text in place of the icon)
+    --   4. Show Buff Bar   [gate: Show Bar]
+    --   5. Show Frame Effects [gate]
+    -- Icon Position is on the Icon tab and Bar Position on the Bar tab
+    -- (owner, 2026-10-14).
+    -- Every card hides while the entry is not Enabled (blacklisted); a note
+    -- says why. Gated cards are the library's group `toggle`.
+    local function blacklisted() return SingleBuffDisplayType(getC()) == "hide" end
+    local function unlessBlacklisted(g)
+        if not g then return nil end
+        local own = g.hidden
+        g.hidden = function(...)
+            if blacklisted() then return true end
+            if type(own) == "function" then return own(...) and true or false end
+            return own == true
+        end
+        return g
+    end
+    local function add(g) if g then position[#position + 1] = unlessBlacklisted(g) end end
+
+    position[#position + 1] = { preset = "bare",
+        hidden = function() return not blacklisted() end,
+        fields = { { control = "note", wide = true,
+            text = "|cffaaaaaaThis buff is disabled. Turn on Enabled above to "
+                .. "configure it.|r" } } }
+
+    if visuals.showCooldownTextField then
+        displayFields[#displayFields + 1] = visuals.showCooldownTextField
+    end
+    if visuals.showCooldownTextNote then
+        displayFields[#displayFields + 1] = visuals.showCooldownTextNote
+    end
+    add({ title = "Show Buff Icon", preset = "form",
+          toggle = visuals.showIconToggle, fields = displayFields })
+
+    if visuals.textInPlaceToggle then
+        local iconHidden = visuals.iconHidden
+        add({ title = "Show Text in place of Icon", preset = "form",
+              toggle = visuals.textInPlaceToggle,
+              hidden = function() return not (iconHidden and iconHidden()) end,
+              fields = textAreaSize.fields })
+    end
+
+    -- TEXT POSITION: the Icon Position card's twin on this tab, for an
+    -- entry whose icon is off and whose text stands in its place -- the one
+    -- case with no Icon tab to hold it. A COPY, down to each field table:
+    -- PushDownGroupHidden folds a card's `hidden` into its fields, and two
+    -- cards sharing field tables would hide each other's fields. The
+    -- closures inside are shared, which is what keeps the two one setting.
+    do
+        local copy = {}
+        for k, v in pairs(positionCard) do copy[k] = v end
+        copy.fields = {}
+        for i, f in ipairs(positionCard.fields or {}) do
+            local cf = {}
+            for k, v in pairs(f) do cf[k] = v end
+            copy.fields[i] = cf
+        end
+        copy.title = "Text Position"
+        local iconHidden, textOn = visuals.iconHidden, visuals.textInPlaceOn
+        copy.hidden = function()
+            return not ((iconHidden and iconHidden()) and (textOn and textOn()))
+        end
+        add(copy)
+    end
+
+    add(visuals.showBarCard)
+    add(visuals.showFrameFxCard)
 
     return {
         groups = PushDownGroupHidden(header),
@@ -4240,7 +4489,8 @@ function SingleBuffCard(mctx)
             position     = { groups = PushDownGroupHidden(position) },
             icon         = { groups = PushDownGroupHidden(iconTab) },
             iconEffects  = { groups = PushDownGroupHidden(visuals.iconEffects) },
-            cooldownText = { groups = PushDownGroupHidden(visuals.cooldownText) },
+            bar          = { groups = PushDownGroupHidden(visuals.bar) },
+            cooldownText = { groups = PushDownGroupHidden(cooldownTextTab) },
             frameEffects = { groups = PushDownGroupHidden(visuals.frameEffects) },
             -- A spec toggle changes three things and no more: the Specs
             -- card's own switches (they share one state), the read-out in
@@ -4299,6 +4549,8 @@ local function SelectedSingleBuffKey(routeKey)
     return key
 end
 
+if BuzzardFramesOptions.ForeverUI then BuzzardFramesOptions.ForeverUI.BindBuffList({ exempt = singleBuffFilterExempt, selectedKey = SelectedSingleBuffKey }) end -- [FOREVER]
+
 local function EnterSingleBuffs(routeKey)
     local bf = BF()
     if not bf then return end
@@ -4317,6 +4569,7 @@ local function EnterSingleBuffs(routeKey)
     bf._currentContainerIndex = sentinel
     SeedSpecFilter()
     local sel   = SelectedSingleBuffKey(routeKey)
+    if ForeverUI() then ForeverUI().EnterBuffListPreview(bf, sel, first) return end -- [FOREVER]
     local was   = bf.IsPreviewingBuffList and bf:IsPreviewingBuffList() or false
     local prevF = bf.GetBuffListPreviewFilter and bf:GetBuffListPreviewFilter() or nil
     local prevK = bf.GetBuffListPreviewKey and bf:GetBuffListPreviewKey() or nil
@@ -4382,18 +4635,21 @@ local function SingleBuffsRootPage()
         -- section root drew it.
         headerField = BuzzardFramesOptions:AuraPreviewField("aurasBuffs"),
         groups = {
-        { title = "Add Buff", preset = "form", fields = {
-            { control = "text", label = "Add Spell Name or ID",
+        -- A STRIP, not a card (owner, 2026-10-14): the add form is a row
+        -- about the list below rather than a group of settings, and the
+        -- field's own label now says what the card's "Add Buff" title did.
+        -- `justify = "start"`: read left to right -- the name, then the
+        -- Mode it is added as -- rather than pushed apart by `spread`.
+        { preset = "strip", justify = "start", fields = {
+            { control = "text", label = "Add Buff by Name or ID",
+              -- Labeled ABOVE, as the filter strip's fields were: inline
+              -- beside a text box reads as cramped.
+              labelPlacement = "above",
               submit = "Add", disabled = "combat",
               suggest = SpellSuggestions,
               -- 30% wider than the text control's natural width. A
               -- MULTIPLE rather than a number: the field is still sized
               -- from the control, so it follows a restyle instead of
-              -- pinning a width that was right for one font.
-              widthMul = 1.3,
-              -- 30% wider than the text control's natural width. A
-              -- multiple rather than a number: the field is still sized
-              -- FROM the control, so it follows a restyle instead of
               -- pinning a width that was right for one font.
               widthMul = 1.3,
               desc = "Start typing a buff name for suggestions from the curated "
@@ -4413,7 +4669,7 @@ local function SingleBuffsRootPage()
             -- Read at COMMIT time, not stored per entry: it is a property of
             -- the add form, and each entry's own Display picker owns the
             -- value afterwards.
-            { control = "segmented", label = "Mode",
+            { control = "segmented", label = "Mode", labelPlacement = "above",
               desc = "Whitelist: show this buff. Blacklist: never show it."
                   .. "\n\nSets the new entry's Display, which you can "
                   .. "change afterwards on the entry itself.",
@@ -4474,6 +4730,7 @@ local function SingleBuffsRootPage()
                         else
                             why = "Filter by Spec"
                         end
+                        if ForeverUI() then why = ForeverUI().BuffListFilterWhy(singleBuffSearch ~= "") end -- [FOREVER]
                         return "|cffaaaaaaNo single buffs match the current "
                             .. why .. ". Clear it to see the other " .. total .. ".|r"
                     end
@@ -4488,88 +4745,6 @@ local function SingleBuffsRootPage()
             end },
         }},
 
-        -- A STRIP, not a card: Filter by Spec and Search act ON the list
-        -- below rather than being settings of their own, and the strip is
-        -- the panel's word for a row that is about what follows it. The
-        -- list card is `flush`, so the two meet with no gap and read as one
-        -- surface -- which is what the tab strip and its page do above.
-        --
-        -- `justify = "start"`, against the strip preset's own `spread`: these
-        -- two fields are read left to right as one sentence -- these buffs, of
-        -- this spec, matching this text -- so Search follows Filter by Spec at
-        -- its own width instead of being pushed to the far edge with the
-        -- page's width between them. Every other strip carries a switch and
-        -- the things that qualify it, which is what spread is for.
-        { preset = "strip", justify = "start", fields = {
-            { control = "dropdown", label = "Filter by Spec",
-              -- Labeled ABOVE, not beside: the strip's own placement is
-              -- inline, which suits a switch and reads as cramped over a
-              -- dropdown and a search box.
-              labelPlacement = "above",
-              desc = "Show only single buffs that belong to that spec: entries "
-                  .. "whose own Spec condition selects it, plus condition-less "
-                  .. "entries whose spell is in that spec's curated list in Aura "
-                  .. "Customizations. A "
-                  .. "condition-less entry whose spell is in no curated list "
-                  .. "(any spell ID you typed in yourself) appears under All "
-                  .. "only.",
-              options = function()
-                  local bf  = BF()
-                  local out = { { value = 0, text = "All" } }
-                  local order = (bf and bf.HEALER_SPEC_ORDER) or {}
-                  for i = 1, #order do
-                      local s = order[i]
-                      out[#out + 1] = { value = s.id,
-                          text = (bf and bf.SpecFilterLabel and bf.SpecFilterLabel(s))
-                                 or s.tabName or s.name or tostring(s.id) }
-                  end
-                  return out
-              end,
-              get = function()
-                  -- The same seed the member source applies; see
-                  -- SeedSpecFilter for why it cannot live only here.
-                  SeedSpecFilter()
-                  return singleBuffSpecFilter
-              end,
-              set = function(_, ctx, val)
-                  local bf = BF()
-                  singleBuffSpecFilter = tonumber(val) or 0
-                  -- A manual filter change ends the session exemption for
-                  -- entries added this session, and ends the follow-player-spec
-                  -- default for the session.
-                  wipe(singleBuffFilterExempt)
-                  singleBuffSpecFilterTouched = true
-                  -- The filter chooses the preview's entry set, so it
-                  -- repaints. The SELECTION is kept: the Ace setter passed
-                  -- the selected entry's key alongside the new filter.
-                  if bf and bf.SetBuffListPreview then
-                      local r  = ctx.app.route
-                      local rk = type(r) == "table" and table.concat(r, "/") or nil
-                      bf:SetBuffListPreview(singleBuffSpecFilter, SelectedSingleBuffKey(rk))
-                  end
-                  if not InCombatLockdown() and bf and bf.RefreshPreviewDummyAuras then
-                      bf:RefreshPreviewDummyAuras()
-                  end
-                  -- Which cards EXIST just changed, so this is structural.
-                  ctx.app:Invalidate("singleBuffs")
-                  ctx.app:RefreshPage()
-              end },
-
-            { control = "search", label = "Search", clear = true,
-              labelPlacement = "above",
-              desc = "Show only entries whose spell name or ID contains this "
-                  .. "text. Clear the box to show them all again.",
-              get = function() return singleBuffSearch end,
-              set = function(_, ctx, val)
-                  -- Lowercased once, here, so SearchHides can do a plain
-                  -- case-insensitive compare against the pre-lowercased
-                  -- haystacks without allocating per entry per render.
-                  singleBuffSearch = tostring(val or ""):lower():match("^%s*(.-)%s*$")
-                  ctx.app:Invalidate("singleBuffs")
-                  ctx.app:RefreshPage()
-              end },
-        }},
-
         -- The Ace noneNote: shown only while there are no single buffs AT
         -- ALL. "None at all" and "none that pass the filter" are different
         -- problems with different fixes, and the summary line above says the
@@ -4577,24 +4752,24 @@ local function SingleBuffsRootPage()
         { preset = "bare", fields = {
             { control = "note", wide = true,
               hidden = function() return #AllSingleBuffRecords() > 0 end,
-              text = "|cffaaaaaaNothing here yet. Use |r|cffffd100Add Buff|r"
+              text = "|cffaaaaaaNothing here yet. Use |r|cffffd100Add Buff by Name or ID|r"
                   .. "|cffaaaaaa above to whitelist a spell -- or blacklist it, "
                   .. "to stop it ever showing. Each entry can also be given its "
                   .. "own position, size and appearance.|r" },
         }},
 
-        -- The list, and whichever entry is selected. Last, so everything
-        -- above it -- Add, Search, Filter by Spec -- is what the reader
-        -- meets first and what stays put while they move through the list.
+        -- The list, and whichever entry is selected. Last, so the Add strip
+        -- above it is what the reader meets first and what stays put while
+        -- they move through the list; Filter by Spec and Search head the
+        -- list column itself (`listFields` below).
         -- `height = "fill"`: the card takes whatever the panel has left
         -- below the cards above it and follows a resize, which is how the
         -- Ace tree group sat -- the list ran to the bottom of the dialog
         -- rather than stopping at a fixed height with the page scrolling
         -- underneath it.
-        -- No title. The card is the list, the strip above says what is
-        -- being filtered, and a "Buffs" heading on a tab already called
-        -- Buff List names it a third time.
-        -- `flush = 2`: the list belongs to the strip above it, but a
+        -- No title. The card is the list, and a "Buffs" heading on a tab
+        -- already called Buff List names it a second time.
+        -- `flush = 2`: the list belongs to the Add strip above it, but a
         -- hairline between them keeps the two surfaces legible as two.
         { preset = "form", flush = 2,
           -- 175 wide: the Ace tree group's default column, which is the
@@ -4606,9 +4781,83 @@ local function SingleBuffsRootPage()
           -- the same collection is spliced under Custom Frame Groups
           -- too, and naming the Raid/Party one there would list the
           -- right entries and navigate out of the section on a click.
+          --
+          -- `listFields`: Filter by Spec and Search sit at the top of the
+          -- list column, above its first row (owner, 2026-10-14) -- the
+          -- fields that act on the list, on the list, the way the rail's
+          -- own search box sits over the rail's tree.
           tree = { route = SectionRoot() .. "/aurasBuffs/singleBuffs",
                    width = 175, height = "fill", minHeight = 240,
-                   listTopPad = 0 } },
+                   listTopPad = 0,
+                   listFields = {
+                    ForeverUI() and ForeverUI().BuffListClassFilterField() or -- [FOREVER]
+                    { control = "dropdown", label = "Filter by Spec",
+                      labelPlacement = "above", width = "full",
+                      desc = "Show only single buffs that belong to that spec: entries "
+                          .. "whose own Spec condition selects it, plus condition-less "
+                          .. "entries whose spell is in that spec's curated list in Aura "
+                          .. "Customizations. A "
+                          .. "condition-less entry whose spell is in no curated list "
+                          .. "(any spell ID you typed in yourself) appears under All "
+                          .. "only.",
+                      options = function()
+                          local bf  = BF()
+                          local out = { { value = 0, text = "All" } }
+                          local order = (bf and bf.HEALER_SPEC_ORDER) or {}
+                          for i = 1, #order do
+                              local s = order[i]
+                              out[#out + 1] = { value = s.id,
+                                  text = (bf and bf.SpecFilterLabel and bf.SpecFilterLabel(s))
+                                         or s.tabName or s.name or tostring(s.id) }
+                          end
+                          return out
+                      end,
+                      get = function()
+                          -- The same seed the member source applies; see
+                          -- SeedSpecFilter for why it cannot live only here.
+                          SeedSpecFilter()
+                          return singleBuffSpecFilter
+                      end,
+                      set = function(_, ctx, val)
+                          local bf = BF()
+                          singleBuffSpecFilter = tonumber(val) or 0
+                          -- A manual filter change ends the session exemption for
+                          -- entries added this session, and ends the follow-player-spec
+                          -- default for the session.
+                          wipe(singleBuffFilterExempt)
+                          singleBuffSpecFilterTouched = true
+                          -- The filter chooses the preview's entry set, so it
+                          -- repaints. The SELECTION is kept: the Ace setter passed
+                          -- the selected entry's key alongside the new filter.
+                          if bf and bf.SetBuffListPreview then
+                              local r  = ctx.app.route
+                              local rk = type(r) == "table" and table.concat(r, "/") or nil
+                              bf:SetBuffListPreview(singleBuffSpecFilter, SelectedSingleBuffKey(rk))
+                          end
+                          if not InCombatLockdown() and bf and bf.RefreshPreviewDummyAuras then
+                              bf:RefreshPreviewDummyAuras()
+                          end
+                          -- Which cards EXIST just changed, so this is structural.
+                          ctx.app:Invalidate("singleBuffs")
+                          ctx.app:RefreshPage()
+                      end },
+
+                    -- No label: "Search" sits INSIDE the box, as the panel's own
+                    -- search box at the top of the rail draws it.
+                    { control = "search", placeholder = "Search", clear = true,
+                      width = "full",
+                      desc = "Show only entries whose spell name or ID contains this "
+                          .. "text. Clear the box to show them all again.",
+                      get = function() return singleBuffSearch end,
+                      set = function(_, ctx, val)
+                          -- Lowercased once, here, so SearchHides can do a plain
+                          -- case-insensitive compare against the pre-lowercased
+                          -- haystacks without allocating per entry per render.
+                          singleBuffSearch = tostring(val or ""):lower():match("^%s*(.-)%s*$")
+                          ctx.app:Invalidate("singleBuffs")
+                          ctx.app:RefreshPage()
+                      end },
+                   } } },
     }}
 end
 
@@ -4642,6 +4891,7 @@ BuffListMemberTitle = function(item)
             -- sensitive and changes the row's art with the player's spec.
             local tex = s and bf and ((bf.CuratedSpellIcon and bf.CuratedSpellIcon(s))
                 or (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(s)))
+            if ForeverUI() then return ForeverUI().BuffListRowTitle(c, tex, label) end -- [FOREVER]
             -- The "!" warning mark: the Spec condition is enabled with nothing
             -- ticked, so the entry can never show in game.
             local warn = (bf and bf.SingleBuffSpecConditionEmpty
@@ -4657,24 +4907,68 @@ BuffListMemberTitle = function(item)
         end
 
 BuffListMemberTabs = (function()
-            local function notCustomized(item)
-                return SingleBuffDisplayType(item.c) ~= "custom"
+            -- Display-tab redesign (owner, 2026-10-14). Order: Display, Icon,
+            -- Icon Effects, Cooldown Text, Bar, Frame Effects, Conditions.
+            -- Customize Buff gates ONLY the icon's tabs; the bar, the text in
+            -- place of the icon and the frame effects follow their own
+            -- Display-tab switches. A blacklisted (not Enabled) entry keeps
+            -- only Display and Conditions, as before. Every switch below
+            -- that adds or removes a tab Invalidates "singleBuffs".
+            local function rec(name)
+                return function(item)
+                    local f = BuzzardFramesOptions[name]
+                    return f and f(item.c, item.sid) or false
+                end
+            end
+            local iconHidden  = rec("SingleBuffIconHidden")
+            local textInPlace = rec("SingleBuffTextInPlace")
+            local ctOff       = rec("SingleBuffCooldownTextOff")
+            local squareByDur = rec("SingleBuffSquareColorByDuration")
+            local barAnyOn    = rec("SingleBuffBarAnyOn")
+            local frameFxOn   = rec("SingleBuffFrameFxOn")
+            local function blacklisted(item)
+                return SingleBuffDisplayType(item.c) == "hide"
+            end
+            -- Show Buff Icon ON and Customize Buff ON.
+            local function iconTabsOff(item)
+                return SingleBuffDisplayType(item.c) ~= "custom" or iconHidden(item)
             end
             return {
-                -- "Display", not "Position": the tab leads with the
-                -- Whitelist/Blacklist picker and the Customize switch, which
-                -- decide whether the buff shows and which other tabs exist.
-                -- The route id stays `position` so saved routes still resolve.
+                -- "Display", not "Position": the tab leads with the switches
+                -- that decide what the entry draws and which other tabs
+                -- exist. The route id stays `position` so saved routes
+                -- still resolve.
                 { id = "position",     title = "Display" },
-                { id = "icon",         title = "Icon",         hidden = notCustomized },
-                { id = "iconEffects",  title = "Icon Effects", hidden = notCustomized },
+                -- Icon: whenever Show Buff Icon is on, Customize Buff or
+                -- not (owner, 2026-10-14) -- it holds Icon Position, which
+                -- applies either way; its styling cards hide themselves
+                -- while Customize Buff is off.
+                { id = "icon",         title = "Icon",
+                  hidden = function(item)
+                      return blacklisted(item) or iconHidden(item)
+                  end },
+                { id = "iconEffects",  title = "Icon Effects", hidden = iconTabsOff },
+                -- (icon ON, Customize ON, Show Cooldown Text ON -- and not a
+                -- Square colored by remaining time, whose square IS the text)
+                -- OR the text stands in the icon's place (no Customize needed).
                 { id = "cooldownText", title = "Cooldown Text",
                   hidden = function(item)
-                      if notCustomized(item) then return true end
-                      local f = BuzzardFramesOptions.SingleBuffSquareColorByDuration
-                      return f and f(item.c, item.sid) or false
+                      if blacklisted(item) then return true end
+                      if iconHidden(item) then return not textInPlace(item) end
+                      if SingleBuffDisplayType(item.c) ~= "custom" then return true end
+                      if ctOff(item) then return true end
+                      return squareByDur(item)
                   end },
-                { id = "frameEffects", title = "Frame Effects", hidden = notCustomized },
+                -- Show Bar on for some Layout (the tab is a route and cannot
+                -- follow the in-page editing Layout).
+                { id = "bar",          title = "Bar",
+                  hidden = function(item)
+                      return blacklisted(item) or not barAnyOn(item)
+                  end },
+                { id = "frameEffects", title = "Frame Effects",
+                  hidden = function(item)
+                      return blacklisted(item) or not frameFxOn(item)
+                  end },
                 { id = "conditions",   title = "Conditions" },
             }
         end)()
@@ -4813,6 +5107,7 @@ local function PresetMembers()
                               title = icon .. " " .. def.label }
         end
     end
+    if ForeverUI() then return ForeverUI().AppendPresetClassMembers(out, t) end -- [FOREVER]
     -- Specs sorted by name, after the roles -- visual separation without a
     -- divider, as the Layouts surface does.
     local specList = {}
@@ -4835,6 +5130,7 @@ end
 
 local function PresetOverrideCard(mctx)
     local item = mctx.item
+    if item.kind == "class" and ForeverUI() then return ForeverUI().PresetClassCard(mctx, BuffsPresetStore, PresetOptions, PresetsRefresh) end -- [FOREVER]
     local kind, entryKey = item.kind, item.entryKey
     local function entry()
         local t = BuffsPresetStore()
@@ -4871,10 +5167,12 @@ local function PresetOverrideCard(mctx)
             -- override present and carrying a preset, since one with no preset
             -- falls through in the resolver and takes priority over nothing.
             { control = "note", wide = true,
-              text = "Current spec has an override which takes "
+              text = ForeverUI() and ForeverUI().TEXT.presetsRoleBeaten or -- [FOREVER]
+                  "Current spec has an override which takes "
                   .. "priority.",
               hidden = function()
                   if kind ~= "role" then return true end
+                  if ForeverUI() then return not ForeverUI().PresetClassOverrideWins() end -- [FOREVER]
                   local bf = BF()
                   local sid = bf and bf.playerSpecID
                   local t = BuffsPresetStore()
@@ -4905,7 +5203,8 @@ local function PresetsRootPage()
         groups = {
         { preset = "bare", fields = {
             { control = "note", wide = true,
-              text = "The Global Preset decides which buffs the Buffs "
+              text = ForeverUI() and ForeverUI().TEXT.presetsIntro or -- [FOREVER]
+                  "The Global Preset decides which buffs the Buffs "
                   .. "display shows. Add a Role or Spec override below to use a "
                   .. "different one in those cases.\n\nWhere a role and a spec "
                   .. "override both apply, the spec override wins." },
@@ -4955,6 +5254,7 @@ local function PresetsRootPage()
                   ctx.app:CollectionAdd("buffsAssigned", "role", val)
               end },
 
+            ForeverUI() and ForeverUI().PresetAddClassField() or -- [FOREVER]
             { control = "dropdown", label = "Add Spec Overrides",
               labelPlacement = "above", widthMul = 1.2, disabled = "combat",
               options = function()
@@ -4996,6 +5296,7 @@ local function PresetsRootPage()
             -- rest of this surface can be per-Layout and this cannot -- it is
             -- one value for the whole profile, which is what the note says.
             { control = "switch", label = "Show Raid Buff Out of Combat",
+              hidden = ForeverHide(), -- [FOREVER] F6
               labelSide = "after",
               desc = "Show raid buffs (Mark of the Wild, Arcane Intellect, "
                   .. "Battle Shout, Power Word: Fortitude, Blessing of the "
@@ -5029,7 +5330,8 @@ function BuzzardFramesOptions:AssignedSpellsPage()
         key    = function(item) return item.id end,
         memberTitle = function(item) return item.title end,
         template    = PresetOverrideCard,
-        emptyText   = "|cffaaaaaaNo role or spec overrides yet. Every case uses "
+        emptyText   = ForeverUI() and ForeverUI().TEXT.presetsEmpty or -- [FOREVER]
+            "|cffaaaaaaNo role or spec overrides yet. Every case uses "
             .. "the Global Preset above.|r",
         add = {
             select = false,
@@ -5037,6 +5339,7 @@ function BuzzardFramesOptions:AssignedSpellsPage()
                 if InCombatLockdown() then return nil end
                 local t = BuffsPresetStore()
                 if not (t and val) then return nil end
+                if kind == "class" then local FO = ForeverUI(); return FO and FO.PresetClassAdd(t, val) or nil end -- [FOREVER]
                 local root
                 if kind == "role" then
                     t.roleOverrides = t.roleOverrides or {}
@@ -5065,6 +5368,7 @@ function BuzzardFramesOptions:AssignedSpellsPage()
                 if InCombatLockdown() then return end
                 local t = BuffsPresetStore()
                 if not t then return end
+                if item.kind == "class" then local FO = ForeverUI(); if FO then FO.PresetClassRemove(t, item.entryKey) end return end -- [FOREVER]
                 local root = (item.kind == "role") and t.roleOverrides
                                                    or  t.specOverrides
                 if root then root[item.entryKey] = nil end

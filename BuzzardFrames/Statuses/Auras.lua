@@ -59,9 +59,10 @@ function Buffs:UNIT_AURA(_, unit)
     -- non-player unit) when nothing needs the data, so the cost when no
     -- missing-buff feature is active is sub-microsecond. With the
     -- toggle-gated registration in AuraCustomizations.lua
-    -- EnsureMissingRaidBuffTracker, users with showMissingRaidBuff and
-    -- showMissingSymbiotic both off everywhere have no trackers registered
-    -- and pay only the #Trackers == 0 fast-bail per UNIT_AURA.
+    -- (EnsureMissingRaidBuffTrackers), users with showMissingRaidBuff off
+    -- everywhere -- or outside every Layout's Instance Type condition --
+    -- have no trackers registered and pay only the #Trackers == 0
+    -- fast-bail per UNIT_AURA.
     --
     -- v67: everything that used to follow sat behind
     -- `if AuraContainerSortMethod ~= nil then return end` — the same

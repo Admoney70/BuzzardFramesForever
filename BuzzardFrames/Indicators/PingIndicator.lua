@@ -21,6 +21,13 @@ local PingIndicator = BF.indicatorPrototype:new("pingIndicator")
 local DEFAULT_SIZE = 24
 local DEFAULT_POS  = { point = "CENTER", x = 0, y = 0 }
 
+-- Frame-level offsets above the unit frame. The OOR darken overlay sits at
+-- +250 (Indicators/RangeAlpha.lua EnsureDarkenOverlay); with "Don't Fade Pings
+-- on Out of Range Units" on, the pin is lifted above it so the darken cannot
+-- dim it either.
+local LEVEL_NORMAL       = 221
+local LEVEL_ABOVE_DARKEN = 251
+
 function PingIndicator:Create(parent)
 	if parent.pingIndicatorTex then
 		parent[self.name] = parent.pingIndicatorFrame
@@ -34,7 +41,7 @@ function PingIndicator:Create(parent)
 	local frame = CreateFrame("Frame", nil, parent)
 	frame:SetSize(size, size)
 	frame:SetPoint(pos.point, parent, pos.point, pos.x, pos.y)
-	frame:SetFrameLevel(parent:GetFrameLevel() + 221)
+	frame:SetFrameLevel(parent:GetFrameLevel() + LEVEL_NORMAL)
 	frame:EnableMouse(false)
 
 	-- Background must sub-layer BELOW the pin (same contract as the
@@ -72,7 +79,8 @@ end
 -- all three -- why table identity is the scope, why weak keys and the
 -- generation key cover two different section-table lifetimes, and why the
 -- generation key rather than the push is what closes the staleness window --
--- is written out once at Indicators/StatusText_Overlay.lua:197-236 and is not
+-- is written out once at the SECTION-TABLE CACHE KEYS comment in
+-- Indicators/StatusText_Overlay.lua and is not
 -- repeated in every indicator. In-tree precedent: BFStatus.lua:993-1005 (scope
 -- key) and Indicators/HealthText.lua:129/:417 (generation key).
 local _blockCacheMeta = { __mode = "k" }
@@ -125,6 +133,7 @@ local function ResolvePingIndicatorBlock(parent)
 	block.point = pos.point
 	block.x     = pos.x
 	block.y     = pos.y
+	block.ignoreRangeFade = (ip and ip.pingIgnoreRangeFade) and true or false
 
 	return block
 end
@@ -142,6 +151,16 @@ function PingIndicator:Layout(parent)
 	frame:SetSize(block.size, block.size)
 	frame:ClearAllPoints()
 	frame:SetPoint(block.point, parent, block.point, block.x, block.y)
+
+	-- "Don't Fade Pings on Out of Range Units". Range fade is ONE SetAlpha on
+	-- the whole unit frame (RangeAlpha.lua ApplyRangeEffects); ignoring parent
+	-- alpha exempts the pin from it, and the level lift puts it above the
+	-- darken overlay. Both are engine-side flags written here, on settings /
+	-- profile changes only -- range ticks and pings do no extra work.
+	-- (Grid2 has no ping indicator and no per-indicator range exemption.)
+	frame:SetIgnoreParentAlpha(block.ignoreRangeFade)
+	frame:SetFrameLevel(parent:GetFrameLevel()
+		+ (block.ignoreRangeFade and LEVEL_ABOVE_DARKEN or LEVEL_NORMAL))
 end
 
 -- The mirror shows/hides the pin; Update only enforces the toggle and

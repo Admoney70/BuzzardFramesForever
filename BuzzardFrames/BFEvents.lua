@@ -67,9 +67,12 @@ local BF = _G["BuzzardFrames"]
 -- here would turn one missing prerequisite into 22 identical "attempt to
 -- call method 'EventOwner' (a nil value)" errors from unrelated files. Fail
 -- once, loudly, naming the cause.
+-- Developer note (never shown to players): this fires when BFEvents.lua
+-- loads before BuzzardFrames exists, i.e. the .toc lists it ahead of
+-- Defaults.lua / Core.lua. The player-facing text only asks for a reinstall.
 if not BF then
-    error("BFEvents.lua loaded before BuzzardFrames exists -- check the .toc:"
-        .. " this file must come after Defaults.lua and Core.lua.", 0)
+    error("Buzzard Frames didn't load correctly (BFEvents). "
+        .. "Please reinstall Buzzard Frames.", 0)
 end
 
 local AceEvent = LibStub("AceEvent-3.0")

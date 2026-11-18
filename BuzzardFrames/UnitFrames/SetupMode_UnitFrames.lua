@@ -458,7 +458,11 @@ function BF:ShowUFTestFrames()
             local ic = BF.icDB and BF.icDB.profile
             isEnabled = ic and ic.incomingCastsEnabled
         else
-            isEnabled = enableKey and p[enableKey]
+            -- ptfEnabled is the Unit Frames module switch: with it off no
+            -- oUF frame is spawned (oUF_Shared.lua), so no box may be drawn
+            -- for one either. Incoming Casts above is its own module and
+            -- deliberately does not depend on it.
+            isEnabled = p.ptfEnabled and enableKey and p[enableKey]
         end
         -- Check detach requirement for bars/castbars/IC
         local detachCheck = UF_DETACH_CHECK[unitKey]

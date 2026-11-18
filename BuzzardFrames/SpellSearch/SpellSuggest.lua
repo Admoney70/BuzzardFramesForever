@@ -63,7 +63,7 @@ end
 -- Returns an ARRAY of { value = <spellID>, text = <row> }, or nil when there
 -- is nothing to offer -- an empty box, no curated data, or no match. `value`
 -- is the ID, which is what the box takes when a row is picked: the add path
--- resolves an ID exactly, where a localised name it has to look up again is
+-- resolves an ID exactly, where a localized name it has to look up again is
 -- a second chance to get a different spell.
 function BF.SpellSuggestions(text, max)
     local sd   = ns and ns.SpellData

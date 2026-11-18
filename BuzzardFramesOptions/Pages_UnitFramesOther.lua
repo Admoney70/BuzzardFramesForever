@@ -532,7 +532,7 @@ local function PosField(spec, name, posKey, defaultPoint, defaultX, relayout)
     end
 
     -- Write, then relayout -- the Ace setter's order, including its
-    -- ufSet-the-whole-table-first step, which is what materialises the
+    -- ufSet-the-whole-table-first step, which is what materializes the
     -- sub-table and the position table on a profile that has neither.
     local function write(field)
         return function(_, _, v)

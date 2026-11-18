@@ -53,6 +53,8 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- questions for the selected group. One line, and every declaration in
 -- this file edits that group instead. See Pages_CustomFrameSections.lua.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
+local function ForeverHide(retail) if ForeverUI() then return true end return retail end -- [FOREVER]
 
 -- ── The two resolved views ─────────────────────────────────────
 --
@@ -940,7 +942,7 @@ end
 -- SUBTAB 2: Debuff Preset/Filter
 -- ══════════════════════════════════════════════════════════════
 
--- The acDB toggles at the foot of the subtab bypass the aura routing on
+-- The five acDB toggles at the foot of the subtab bypass the aura routing on
 -- purpose: they live in acDB.profile, are ONE value for the whole profile and
 -- cannot be set per Layout. Routing them through the aura write would
 -- silently relocate the value away from the key every runtime reader already
@@ -952,11 +954,20 @@ local GLOBAL_SCOPE_NOTE =
 
 local LONG_TERM_DEBUFFS = {
     { key = "showSatedDebuffs", label = "Sated / Exhaustion",
-      desc = "Show Sated, Exhaustion, and similar "
+      desc = "Show Sated, Exhaustion, Temporal Displacement, and similar "
           .. "bloodlust debuffs on raid/party frames when out of combat." },
     { key = "showDeserterDebuffs", label = "Deserter",
       desc = "Show BG Deserter and Dungeon Deserter debuffs on raid/party "
           .. "frames when out of combat." },
+    { key = "showSkyridingDebuffs", label = "Skyriding Ride Along",
+      desc = "Show Skyriding Ride Along (Available, Active, Inactive) "
+          .. "debuffs on raid/party frames when out of combat." },
+    { key = "showArcaneEmpowermentDebuffs", label = "Arcane Empowerment",
+      desc = "Show the Arcane Empowerment debuff on raid/party frames when "
+          .. "out of combat." },
+    { key = "showTimeTrialDebuffs", label = "Time Trial Practice",
+      desc = "Show the Time Trial Practice debuff on raid/party frames when "
+          .. "out of combat." },
 }
 
 -- One MENU ROW per long-term debuff, in the shape the panel's own menu
@@ -1349,7 +1360,9 @@ local function RowCard(row, effect)
             control = "switch", label = "Include Long-Cooldown Dispels",
             bind = "debuffDispMeLongCd", wide = true,
             desc = "Factor in long-cd dispel abilities. e.g. Include poisons "
-                .. "for Shaman when Poison Cleansing Totem is talented.",
+                .. "for Shaman when Poison Cleansing Totem is talented, "
+                .. "Include Bleed, Curse and Disease for Evoker when "
+                .. "Cauterizing Flame is talented.",
             hidden = dispToggleHidden, disabled = "combat",
             onChange = governorEffect,
             get = OffUnlessTrue(DP, "debuffDispMeLongCd"),
@@ -1539,6 +1552,7 @@ local function PresetFilterGroups(effect)
           menuStyle = { minWidth = 230 },
           items = function()
               local out = {}
+              if ForeverUI() then return ForeverUI().LongTermDebuffItems(LONG_TERM_DEBUFFS, GlobalAuraItem) end -- [FOREVER]
               for i = 1, #LONG_TERM_DEBUFFS do
                   out[i] = GlobalAuraItem(LONG_TERM_DEBUFFS[i])
               end
@@ -1886,7 +1900,8 @@ local function DispelGroups(effect)
               bind = "dispelVisualDispMeLongCd", wide = true,
               desc = "Factor in long-cd dispel abilities. e.g. Include "
                   .. "poisons for Shaman when Poison Cleansing Totem is "
-                  .. "talented.",
+                  .. "talented, Include Bleed, Curse and Disease for Evoker "
+                  .. "when Cauterizing Flame is talented.",
               hidden = function() return not DispelCustomMode() end,
               onChange = effect,
               get = OffUnlessTrue(IP, "dispelVisualDispMeLongCd") },
@@ -1928,7 +1943,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelIndicatorOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("dispel indicator"),
-              hidden = DispelHidden, onChange = effect,
+              hidden = ForeverHide(DispelHidden), onChange = effect, -- [FOREVER] F8
               set = Setter("dispelIndicatorOnlyIfReady", function()
                   local bf = BF()
                   if bf and bf.UpdateDispelCooldownTracking then
@@ -2028,7 +2043,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelOverlayOnlyIfReady", wide = true, newRow = true,
               desc = ONLY_IF_READY_DESC:format("debuff overlay"),
-              hidden = OverlayHidden, disabled = OverlayOff, onChange = effect,
+              hidden = ForeverHide(OverlayHidden), disabled = OverlayOff, onChange = effect, -- [FOREVER] F8
               set = Setter("dispelOverlayOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()
@@ -2078,7 +2093,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelHealthColorOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("health color change"),
-              hidden = HealthColorSubHidden, onChange = effect,
+              hidden = ForeverHide(HealthColorSubHidden), onChange = effect, -- [FOREVER] F8
               set = Setter("dispelHealthColorOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()
@@ -2129,7 +2144,7 @@ local function DispelGroups(effect)
             { control = "switch", label = "Only Show if Dispel Available",
               bind = "dispelBorderOnlyIfReady", wide = true,
               desc = ONLY_IF_READY_DESC:format("debuff border"),
-              hidden = BorderHidden, disabled = BorderOff, onChange = effect,
+              hidden = ForeverHide(BorderHidden), disabled = BorderOff, onChange = effect, -- [FOREVER] F8
               set = Setter("dispelBorderOnlyIfReady", function()
                   if InCombatLockdown() then return end
                   local bf = BF()

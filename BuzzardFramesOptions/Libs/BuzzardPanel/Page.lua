@@ -1489,7 +1489,7 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
 
     -- 1. measure every field
     local items = {}
-    for _, field in ipairs(group.fields or {}) do
+    for fi, field in ipairs(group.fields or {}) do
         -- A LINE BREAK is not a field. It builds no widget, takes no
         -- height and no row space, and carries no value -- it is a mark in
         -- the field list saying "the row ends here", which the packer
@@ -1525,10 +1525,29 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
             if type(field.hidden) == "function" then NoteDynamic(app) end
             local prefW, minW, h, stretch, ctlW =
                 FieldMetrics(def, field, preset, contentW, ctx)
-            items[#items + 1] = {
-                field = field, def = def, ctlW = ctlW,
+            local one = {
+                field = field, def = def, ctlW = ctlW, fi = fi,
                 prefW = prefW, minW = minW, h = h, stretch = stretch,
             }
+            -- `stack = true`: drawn UNDER the field just before it, in the
+            -- same cell, rather than beside it -- a column of two switches
+            -- in a row of dropdowns. Only when that field is the one drawn
+            -- immediately before this one; with it hidden (or a break
+            -- between) this is an ordinary field.
+            local prev = items[#items]
+            if field.stack and prev and not prev.isBreak and prev.fi == fi - 1 then
+                prev.stacked = prev.stacked or { { field = prev.field, def = prev.def,
+                    ctlW = prev.ctlW, h = prev.h } }
+                prev.stacked[#prev.stacked + 1] = one
+                prev.h = prev.h + preset.gapY + h
+                prev.prefW = math.max(prev.prefW, prefW)
+                prev.minW  = math.max(prev.minW, minW)
+                prev.stretch = prev.stretch or stretch
+                prev.ctlW = math.max(prev.ctlW or 0, ctlW or 0)
+                prev.fi = fi
+            else
+                items[#items + 1] = one
+            end
         end
     end
 
@@ -1556,21 +1575,36 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
         -- switch beside two labeled dropdowns should sit level with the
         -- DROPDOWNS, not with their labels, and it still does.
         local rowH, labelRow = 0, false
+        local hasStack, labeledH = false, 0
         for _, it in ipairs(ln) do
             -- Whole pixels: a wrapped note measures to a fractional height,
             -- and every control below it would otherwise sit on a half
             -- pixel -- its top and bottom borders drawn as two or none.
             it.h = math.ceil(it.h or 0)
             rowH = math.max(rowH, it.h)
-            it.topLabel = (not it.def.ownLabel) and (ns.FieldLabel(it.field) ~= nil)
+            it.topLabel = (not it.stacked) and (not it.def.ownLabel)
+                and (ns.FieldLabel(it.field) ~= nil)
                 and ((it.field.labelPlacement or preset.labelPlacement) ~= "left")
-            if it.topLabel then labelRow = true end
+            if it.topLabel then
+                labelRow = true
+                labeledH = math.max(labeledH, it.h)
+            end
+            if it.stacked then hasStack = true end
         end
         local x = 0
         for _, it in ipairs(ln) do
             local top
-            if it.topLabel then
-                top = 0
+            if it.stacked then
+                -- A stack is centered on the WHOLE row: it is a column of
+                -- controls standing beside the row's captioned ones, not
+                -- one more control under their caption line.
+                top = (rowH - it.h) / 2
+            elseif it.topLabel then
+                -- Labeled-above fields stay top-aligned with each other
+                -- (one label baseline). Beside a stack taller than they
+                -- are, the block of them is centered in the row instead of
+                -- hanging from its top.
+                top = hasStack and (rowH - labeledH) / 2 or 0
             elseif labelRow and it.field.rowAlign ~= "center" then
                 top = LABEL_H + (rowH - LABEL_H - it.h) / 2
             else
@@ -1584,7 +1618,18 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
                 -- above it and it does not.
                 top = (rowH - it.h) / 2
             end
-            local y = y + math.max(0, math.floor(top + 0.5))
+            local cellY = y + math.max(0, math.floor(top + 0.5))
+            local cell = it
+            for si, sub in ipairs(cell.stacked or { cell }) do
+            local it = (sub == cell) and cell
+                       or { field = sub.field, def = sub.def, ctlW = sub.ctlW,
+                            h = math.ceil(sub.h or 0), w = cell.w }
+            local y = cellY
+            if si > 1 then
+                for k = 1, si - 1 do
+                    y = y + math.ceil(cell.stacked[k].h or 0) + preset.gapY
+                end
+            end
             local field = it.field
             -- `scope` is which HOST this widget was drawn into -- see the
             -- render-scope note above ns.page.ReleaseScope. It rides on the
@@ -1659,6 +1704,21 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
                 -- clip nor wrap. The label-BESIDE branch below has always
                 -- worked this way; this branch used to hand over the cell.
                 e.widget:SetWidth(math.max(24, math.min(it.ctlW or it.w, it.w)))
+                -- `width = "full"`: the control spans the row, so it is held
+                -- by BOTH edges, the way a tree row's highlight is. A host
+                -- that is resized without a re-render -- the tree's list head
+                -- while its divider is dragged -- then carries the control
+                -- (and its label) with it, instead of leaving it at the width
+                -- it was packed for until the release re-renders the page.
+                if field.width == "full" then
+                    local rx = -(width - cx - it.w)
+                    if e.label then
+                        e.label:SetPoint("TOPRIGHT", g.body, "TOPRIGHT", rx, -y)
+                        e.widget:SetPoint("TOPRIGHT", g.body, "TOPRIGHT", rx, -(y + LABEL_H))
+                    else
+                        e.widget:SetPoint("TOPRIGHT", g.body, "TOPRIGHT", rx, -y)
+                    end
+                end
             else
                 -- The control keeps its own width and the LABEL takes
                 -- what is left, rather than both being estimated
@@ -1693,12 +1753,24 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
                     e.hit:Hide()
                 elseif e.label then
                     local lx = after and (cx + ww + 8) or cx
-                    -- A label AFTER its control sits on the control's own
-                    -- baseline -- bottom aligned with the switch beside it,
-                    -- not with the top of the cell -- because the two read
-                    -- as one thing: the state, and what it is the state of.
-                    local ly = after and (y + it.h - 15) or (y + 3)
-                    e.label:SetPoint("TOPLEFT", g.body, "TOPLEFT", lx, -ly)
+                    if after and type(labelText) == "string"
+                       and labelText:find("|T", 1, true) then
+                        -- A label AFTER its control that carries an inline
+                        -- |T icon is CENTERED on the control, so the icon
+                        -- sits level with the switch (owner, 2026-11-17).
+                        -- The fixed offset below assumes one line of plain
+                        -- text: an icon taller than the text grows the line
+                        -- and sank it below the switch.
+                        e.label:SetPoint("LEFT", e.widget, "RIGHT", 8, 0)
+                    else
+                        -- A plain-text label AFTER its control sits on the
+                        -- control's own baseline -- bottom aligned with the
+                        -- switch beside it, not with the top of the cell --
+                        -- because the two read as one thing: the state, and
+                        -- what it is the state of.
+                        local ly = after and (y + it.h - 15) or (y + 3)
+                        e.label:SetPoint("TOPLEFT", g.body, "TOPLEFT", lx, -ly)
+                    end
                     e.label:SetWidth(lw)
                     e.hit:SetPoint("TOPLEFT", g.body, "TOPLEFT", lx, -y)
                     e.hit:SetSize(lw, it.h)
@@ -1751,8 +1823,9 @@ local function LayoutGroup(app, g, group, preset, ctx, width)
             e.group = group
             app.liveFields[#app.liveFields + 1] = e
             IndexWidget(app, field, e)
+            end
 
-            x = x + it.w + preset.gapX + (it.padAfter or 0)
+            x = x + cell.w + preset.gapX + (cell.padAfter or 0)
         end
         y = y + rowH + preset.gapY
     end
@@ -2003,6 +2076,16 @@ end
 --   * a group that declares NO fields at all stays. That is a spacer, a
 --     note or a heading -- something whose whole content is its chrome,
 --     not a card whose contents vanished.
+-- Does any field in the group draw? A field naming no known control (a
+-- linebreak among them) does not count.
+local function HasShownField(app, group, ctx)
+    for _, field in ipairs(group.fields or {}) do
+        local def = app.controls[field.control] or ns.builtinControls[field.control]
+        if def and not ns.IsHidden(field, ctx) then return true end
+    end
+    return false
+end
+
 local function GroupShown(app, group, ctx)
     if ns.IsHidden(group, ctx) then return false end
     if group.toggle then return true end
@@ -2011,11 +2094,7 @@ local function GroupShown(app, group, ctx)
     if group.collapsible then return true end
     local fields = group.fields
     if not fields or #fields == 0 then return true end
-    for _, field in ipairs(fields) do
-        local def = app.controls[field.control] or ns.builtinControls[field.control]
-        if def and not ns.IsHidden(field, ctx) then return true end
-    end
-    return false
+    return HasShownField(app, group, ctx)
 end
 
 
@@ -2052,6 +2131,32 @@ local TREE_W, TREE_H, TREE_MIN_H = 180, 420, 200
 local TREE_SPLIT_W  = 5
 local TREE_W_MIN    = 120
 local TREE_PANE_MIN = 260
+-- The list head (`tree.listFields`): 6px between it and the first row, the
+-- rail search header's number. Its TOP is TREE_LIST_INSET below the band's
+-- top edge (owner, 2026-10-14), the same 5px as its sides.
+local TREE_HEAD_PAD   = 6
+-- The list column's inset from the band's left edge (owner, 2026-10-14:
+-- 5px, not the card's 11px padding it used to take). The rows and the list
+-- head both start here, and the head's fields stop the same 5px short of
+-- the divider, so they span the column.
+local TREE_LIST_INSET = 5
+-- Between one list-head field and the next (owner, 2026-10-14: 3px, where
+-- a card's rows take the preset's 9).
+local TREE_HEAD_GAP   = 3
+
+-- The list head's preset: `bare` with the head's own row gap. Built once
+-- per app and rebuilt only if `bare` itself is redefined, so a render
+-- allocates nothing for it.
+local function TreeHeadPreset(app)
+    local base = app.groupPresets.bare or app.groupPresets.default
+    local p = app.groupPresets["bp:treeListHead"]
+    if not p or p.bpBase ~= base then
+        p = ns.CopySkin(base, { gapY = TREE_HEAD_GAP })
+        p.bpBase = base
+        app.groupPresets["bp:treeListHead"] = p
+    end
+    return "bp:treeListHead"
+end
 
 -- Where a reader's own column widths live: keyed by the tree's route, in
 -- the table the consuming addon hands NewApp for the panel's geometry --
@@ -2100,6 +2205,7 @@ local function HideTreeFurniture(app, g)
     if g.treePaneBand then g.treePaneBand:Hide() end
     if g.treeRail then g.treeRail:Hide() end
     if g.treeHead then g.treeHead:Hide() end
+    if g.treeListHead then g.treeListHead:Hide() end
     -- The splitter with them: a grab strip over a card that is no longer a
     -- tree group is an invisible button that resizes something not there.
     if g.treeSplit then
@@ -2186,7 +2292,7 @@ local function RenderPaneContent(app, g)
     -- The frame must still be showing THIS key, not merely be the same
     -- frame. A pooled card serves one pane and then another: `st.frame == g`
     -- alone was true even after the card had been handed to a different
-    -- tree, so this pane's remembered offset was discarded in favour of the
+    -- tree, so this pane's remembered offset was discarded in favor of the
     -- live offset of somebody else's pane.
     local keepScroll = (st.frame == g and g.bpPaneLastKey == key)
                        and (g.treeScroll:GetVerticalScroll() or 0)
@@ -2247,8 +2353,22 @@ local function RenderPaneContent(app, g)
     if tabKids and #tabKids == 0 then tabKids = nil end
     local fixedH = 0
     if tabKids then
+        -- A HEIGHT FROM BIRTH, like treeContent's SetSize(1, 1). A frame
+        -- with one anchor needs BOTH an explicit width and height for a
+        -- valid rect, and the head's height is only known after its cards
+        -- are drawn. Created with a width alone, the head had NO valid rect
+        -- while RenderGroups ran -- and anything in it that forced a
+        -- resolve mid-render (a switch's hit-rect sizing calls GetWidth)
+        -- resolved its card's surface, body and widgets against that, and
+        -- they STAYED invalid after the head got its height: the cards
+        -- kept their place and drew nothing. Owner report: a blank name and
+        -- per-Layout strip on the first visit to an entry -- the first time
+        -- a pooled card hosted a head -- fine on revisits, when the head
+        -- already had a height from before. Measured in game 2026-10-14:
+        -- head cards rv=true, their surface/body/fields rv=false.
         if not g.treeHead then
             g.treeHead = CreateFrame("Frame", nil, g.treePane)
+            g.treeHead:SetSize(1, 1)
         end
         g.treeHead:ClearAllPoints()
         g.treeHead:SetPoint("TOPLEFT",  g.treePane, "TOPLEFT",  0, 0)
@@ -2385,6 +2505,11 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
     -- it started from. Clamped here as well as at the drag, so a width
     -- stored by a wider panel cannot survive into a narrower one.
     local listW = TreeWidth(app, key, spec, width)
+    -- Where the list column starts in the body: the band's own 1px inset,
+    -- then TREE_LIST_INSET. Every horizontal sum below uses this, not the
+    -- card's padding -- the anchor, the splitter's arithmetic and the
+    -- pane's width -- so the three cannot disagree.
+    local listX = 1 + TREE_LIST_INSET
     -- No route to list: the card draws no furniture and hosts no pane, so
     -- it must not still CLAIM one -- a stale claim would have
     -- ns.page.ScheduleRender redraw a pane this card no longer has.
@@ -2490,7 +2615,7 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
         -- Its own button over the rule rather than a mouse-enabled
         -- texture, and 5px wide: a splitter you cannot grab because a row
         -- is on top of it is no splitter, and one much wider steals clicks
-        -- from the rows it sits beside. Modelled on the panel's own rail
+        -- from the rows it sits beside. Modeled on the panel's own rail
         -- splitter (Frame.lua), which does exactly this for the rail.
         local sp = CreateFrame("Button", nil, g.body)
         sp:SetWidth(TREE_SPLIT_W)
@@ -2503,7 +2628,7 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
     end
 
     g.treeList:ClearAllPoints()
-    g.treeList:SetPoint("TOPLEFT", g.body, "TOPLEFT", pad, 0)
+    g.treeList:SetPoint("TOPLEFT", g.body, "TOPLEFT", listX, 0)
     g.treeList:SetSize(listW, h)
     g.treeList:Show()
 
@@ -2556,7 +2681,7 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
         -- captured once: the card is pooled, so a closure built on the
         -- first render would be answering for a different page by the
         -- fifth. `bpKey` is the tree whose width is being changed.
-        sp.bpKey, sp.bpPad, sp.bpH, sp.bpCardW = key, pad, h, width
+        sp.bpKey, sp.bpPad, sp.bpH, sp.bpCardW = key, listX, h, width
         sp.bpApp = app
 
         local function follow(self)
@@ -2649,7 +2774,67 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
     -- sits a padding lower. See ns.attach's pane_topRight.
     g.treePane.bpCard = g
 
-    ns.nav.RenderTreeInto(app, g.treeList, key, spec.listTopPad)
+    -- THE LIST'S HEAD: `tree.listFields`, drawn across the top of the list
+    -- column and above its first row -- the in-page twin of the rail's
+    -- search header (Search.lua's RailHeader), with the same padding above
+    -- and below. It starts where the rows do and stops TREE_LIST_INSET short
+    -- of the divider, so its fields are inset equally on both sides. Each
+    -- field takes its own line at that width. The
+    -- rows start under it: its height is added to the tree's top pad, so
+    -- the list's row count and its signature both follow it.
+    --
+    -- Its cards are the PAGE's, acquired in the page's scope like any other
+    -- card on it; the pane's own redraw never touches them.
+    local listHeadH = 0
+    local lf = spec.listFields
+    if type(lf) == "function" then lf = lf(ctx) end
+    if type(lf) == "table" and lf[1] then
+        if not g.treeListHead then
+            -- A height from birth, for the reason g.treeHead has one.
+            g.treeListHead = CreateFrame("Frame", nil, g.body)
+            g.treeListHead:SetSize(1, 1)
+        end
+        local head = g.treeListHead
+        head:ClearAllPoints()
+        -- The band reaches `overTop` above the list's own top, so the head
+        -- sits TREE_LIST_INSET below the BAND's top: an offset from the
+        -- list's top that is positive (above it) whenever the band
+        -- reaches further than 5px.
+        local headY = overTop - TREE_LIST_INSET
+        head:SetPoint("TOPLEFT",  g.treeList, "TOPLEFT",  0, headY)
+        head:SetPoint("TOPRIGHT", g.treeList, "TOPRIGHT", -TREE_LIST_INSET, headY)
+        head:SetFrameLevel(g.body:GetFrameLevel() + 3)
+        -- The head IS the margin; its card takes none of its own.
+        head.bpCardInset = 0
+        head:Show()
+        -- One field per line, at the column's width: a linebreak between
+        -- each, and `fill` so a stretchy control takes the whole line.
+        local fields = {}
+        for i, f in ipairs(lf) do
+            if i > 1 then fields[#fields + 1] = { control = "linebreak" } end
+            fields[#fields + 1] = f
+        end
+        local hgroups = { { preset = TreeHeadPreset(app), justify = "fill",
+                            fields = fields } }
+        local drawn = ns.page.DrawnGroups(app, hgroups, ctx)
+        local used  = ns.page.RenderGroups(app, head, drawn, ctx,
+                                           math.max(listW - TREE_LIST_INSET, 1), {})
+        -- RenderGroups ends every card with the page's gap; the head's own
+        -- bottom pad replaces it.
+        local inner = math.max(0, used - GROUP_GAP)
+        head:SetHeight(math.max(inner, 1))
+        -- The rows' top pad, measured from the list's own top: down to the
+        -- head's bottom, then the gap.
+        if inner > 0 then
+            listHeadH = math.max(0, inner - headY + TREE_HEAD_PAD)
+        end
+    elseif g.treeListHead then
+        g.treeListHead:Hide()
+    end
+
+    local topPad = spec.listTopPad
+    if listHeadH > 0 then topPad = listHeadH + (topPad or 0) end
+    ns.nav.RenderTreeInto(app, g.treeList, key, topPad)
 
     -- Landed on the collection ITSELF: select its first row.
     --
@@ -2693,7 +2878,7 @@ local function LayoutTreeGroup(app, g, group, preset, ctx, width, avail)
                  -- is the pane less the gutter reserved for the bar. The
                  -- same arithmetic the anchors use, so the cards are packed
                  -- for the width they actually get.
-                 paneW = math.max((width - listW - pad - 1 - ns.SCROLLBAR_GUTTER), 1),
+                 paneW = math.max((width - listW - listX - 1 - ns.SCROLLBAR_GUTTER), 1),
                  -- Only for the `ctx.db` fallback: a member page that
                  -- declares no db of its own reads the card's.
                  ctx   = ctx }
@@ -2843,7 +3028,10 @@ function ns.page.RenderGroups(app, host, drawn, ctx, width, page)
         -- should have met it. `bpBandBleed` on the host is how much of that
         -- reserve a band may take back; cards keep the margin either way.
         local bleed = (band and host.bpBandBleed) or 0
-        local inset = band and 0 or PAGE_INSET
+        -- `bpCardInset` on the host: a narrower margin for a host that is
+        -- itself a narrow column -- the tree's list head, whose fields sit
+        -- at the rail search box's margin rather than the page's.
+        local inset = band and 0 or (host.bpCardInset or PAGE_INSET)
         g:SetPoint("TOPLEFT",  host, "TOPLEFT",   inset, -y)
         g:SetPoint("TOPRIGHT", host, "TOPRIGHT", -inset + bleed, -y)
         g:Show()
@@ -2876,6 +3064,15 @@ function ns.page.RenderGroups(app, host, drawn, ctx, width, page)
         -- `dims` too: the reader asked for it directly, by the caret.
         local shut = IsCollapsed(app, group)
         if shut then gateOn = false end
+        -- A gated card that is ON with nothing to draw -- no fields, or
+        -- every one hidden -- is its header alone, exactly as it is OFF,
+        -- with the switch still lit (gateLit). Its body would be padding
+        -- around nothing: a "Show Buff Bar" whose settings live on another
+        -- tab drew an empty box under its header every time it was on.
+        if gate and group.title and gateOn and not group.tree
+           and not HasShownField(app, group, ctx) then
+            gateOn = false
+        end
         local tabNow = (preset.headerShape == "tab") and group.title
 
         -- A collapsed tab or plain heading has NO box at all: it sits

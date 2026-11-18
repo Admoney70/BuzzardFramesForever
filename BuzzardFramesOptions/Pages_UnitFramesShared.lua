@@ -301,7 +301,7 @@ end
 -- One root per unit, with two namespaces: `unit` is the per-unit
 -- sub-table (ufGet/ufSet), `prof` is the flat profile root. A key whose
 -- value is a TABLE answers with a wrapper of its own, so a composite can
--- bind `unit.healthPctPos.point` and a write materialises the sub-table
+-- bind `unit.healthPctPos.point` and a write materializes the sub-table
 -- on demand exactly as makePosGroup's setters do.
 --
 -- The combat guard on every write is ufSet's own, kept where ufSet had
@@ -326,7 +326,7 @@ local function BuildRoot(unit)
         return p and p[unit]
     end
 
-    -- profile[unit][key], materialised -- ufSet's `profile[unit] =
+    -- profile[unit][key], materialized -- ufSet's `profile[unit] =
     -- profile[unit] or {}` written once.
     local function UnitTableForWrite()
         local p = Prof()

@@ -35,6 +35,7 @@ local ApplyPreviewName             = function(...) return BF._preview.ApplyPrevi
 local ApplyPreviewHealthText       = function(...) return BF._preview.ApplyPreviewHealthText(...) end
 local ApplyPreviewPowerBar         = function(...) return BF._preview.ApplyPreviewPowerBar(...) end
 local ApplyPreviewRoleIcon         = function(...) return BF._preview.ApplyPreviewRoleIcon(...) end
+local ApplyPreviewIconTests        = function(...) return BF._preview.ApplyPreviewIconTests(...) end
 local ApplyPreviewHighlights       = function(...) return BF._preview.ApplyPreviewHighlights(...) end
 local ApplyPreviewAggro            = function(...) return BF._preview.ApplyPreviewAggro(...) end
 local ApplyPreviewStatus           = function(...) return BF._preview.ApplyPreviewStatus(...) end
@@ -157,8 +158,9 @@ local CF_FAKE_UNIT_DEFAULTS = {
     { name = "CFBuzzard1", class = "PALADIN",     hp = 0.90, role = "TANK"    },
     { name = "CFBuzzard2", class = "DRUID",        hp = 0.65, role = "HEALER"  },
     { name = "CFBuzzard3", class = "ROGUE",        hp = 0.45, role = "DAMAGER" },
-    { name = "CFBuzzard4", class = "WARRIOR",      hp = 0.30, role = "TANK"    },
+    { name = "CFBuzzard4", class = "DEATHKNIGHT",  hp = 0.30, role = "TANK"    },
 }
+if BF.isForever then BF.Forever.ApplyPreviewRoster(CF_FAKE_UNIT_DEFAULTS) end -- [FOREVER] 9 Forever classes only
 
 -- Preview frames are standalone visual dummies for the options panel.
 -- They are NOT real unit frames: no header parent, no unit assignment,
@@ -610,35 +612,14 @@ local function LayoutPreviewFrame(frame, flatID)
 
     frame:SetSize(w, h)
 
-    local bp = BF:GetSectionProfileForFrame("borders", frame) or {}
-    local borderN = BF:EffectiveBorderPixels(bp)
-    local borderUI = BF:PixelsToUI(borderN)
-    -- v28: resolve healthPower per-frame so preview frames see per-flat
-    -- values for the power-bar visibility/height reads below.
-    local hp = BF:GetSectionProfileForFrame("healthPower", frame) or {}
-    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
-    local powerH = anyPowerBar and BF:Scale(hp.powerBarHeight or 4) or 0
-
-    -- Update backdrop border to match current thickness/color/opacity.
-    -- Rounded styles: NO square backdrop edge — the real
-    -- Container:Layout below draws the ring + mask on this frame.
-    if BF.IsRoundedBorderStyle(bp.borderStyle) then
-        frame:SetBackdrop(nil)
-    elseif borderN > 0 then
-        local edge = borderUI
-        frame:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8X8",
-            edgeFile = "Interface\\Buttons\\WHITE8X8",
-            edgeSize = edge,
-            insets   = { left = edge, right = edge, top = edge, bottom = edge },
-        })
-        local bc = bp.borderColor or { r=0, g=0, b=0 }
-        local ba = bp.borderOpacity or 1.0
-        frame:SetBackdropBorderColor(bc.r, bc.g, bc.b, ba)
-        frame:SetBackdropColor(0, 0, 0, 0)
-    else
-        frame:SetBackdrop(nil)
-    end
+    -- ONE BORDER, the live one (owner 2026-10-12): Container:Layout (run
+    -- below) draws the frame border -- its frameBorder edges, or the rounded
+    -- ring -- at the frame-scale width live frames use. The square backdrop
+    -- edge this used to add drew a SECOND border under it, at the
+    -- UIParent-scale BF:PixelsToUI width (different at any frame scale but 1)
+    -- and always opaque (it read the removed borderOpacity key, never
+    -- borderColor.a). Its fill was transparent, so clearing it loses nothing.
+    frame:SetBackdrop(nil)
 
     -- Sync frameWidth/frameHeight on the parent container so that
     -- indicator Layout methods (which read parent:GetParent().frameWidth)
@@ -706,34 +687,18 @@ local function LayoutPreviewCFFrame(frame, cfGroup)
 
     frame:SetSize(w, h)
 
-    -- Now that _cfgFlat is stamped, GetSectionProfileForFrame resolves
-    -- per-section overrides against the CFG flat correctly.
-    local bp = BF:GetSectionProfileForFrame("borders", frame) or {}
-    local borderN = BF:EffectiveBorderPixels(bp)
-    local borderUI = BF:PixelsToUI(borderN)
-    local hp = BF:GetSectionProfileForFrame("healthPower", frame) or {}
-    local anyPowerBar = hp.showAllPowerBars or hp.showPowerBarHealers
-    local powerH = anyPowerBar and BF:Scale(hp.powerBarHeight or 4) or 0
+    -- _cfgFlat is stamped above, so every GetSectionProfileForFrame read
+    -- below (the indicator Layouts) resolves per-section overrides against
+    -- the CFG flat correctly.
 
-    -- Rounded styles: skip the square backdrop edge (real
-    -- Container:Layout draws the ring + mask).
-    if BF.IsRoundedBorderStyle(bp.borderStyle) then
-        frame:SetBackdrop(nil)
-    elseif borderN > 0 then
-        local edge = borderUI
-        frame:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8X8",
-            edgeFile = "Interface\\Buttons\\WHITE8X8",
-            edgeSize = edge,
-            insets   = { left = edge, right = edge, top = edge, bottom = edge },
-        })
-        local bc = bp.borderColor or { r=0, g=0, b=0 }
-        local ba = bp.borderOpacity or 1.0
-        frame:SetBackdropBorderColor(bc.r, bc.g, bc.b, ba)
-        frame:SetBackdropColor(0, 0, 0, 0)
-    else
-        frame:SetBackdrop(nil)
-    end
+    -- ONE BORDER, the live one (owner 2026-10-12): Container:Layout (run
+    -- below) draws the frame border -- its frameBorder edges, or the rounded
+    -- ring -- at the frame-scale width live frames use. The square backdrop
+    -- edge this used to add drew a SECOND border under it, at the
+    -- UIParent-scale BF:PixelsToUI width (different at any frame scale but 1)
+    -- and always opaque (it read the removed borderOpacity key, never
+    -- borderColor.a). Its fill was transparent, so clearing it loses nothing.
+    frame:SetBackdrop(nil)
 
     do
         local par = frame:GetParent()
@@ -1352,6 +1317,7 @@ function BF:RefreshPreviewName()        ForAllFrames(ApplyPreviewName)        en
 function BF:RefreshPreviewHealthText()  ForAllFrames(ApplyPreviewHealthText)  end
 function BF:RefreshPreviewRoleIcon()    ForAllFrames(ApplyPreviewRoleIcon)    end
 function BF:RefreshPreviewStatusIcons() ForAllFrames(ApplyPreviewStatusIcons) end
+function BF:RefreshPreviewIconTests()   ForAllFrames(ApplyPreviewIconTests)   end
 function BF:RefreshPreviewStatus()      ForAllFrames(ApplyPreviewStatus)      end
 -- v29: granular refresh for highlight/overlay/dispel color/alpha edits
 -- (border color, aggro style, target highlight color/opacity/width, debuff

@@ -627,7 +627,7 @@ function ns.RoundedFill(frame, layer, radius, sides, color, inset)
             if square[pt] then
                 -- A square corner carries its color in the TEXTURE, a round
                 -- one in the vertex color. The two multiply, so a corner
-                -- that has been both needs the other half neutralised or it
+                -- that has been both needs the other half neutralized or it
                 -- paints at color-squared. White costs nothing when the
                 -- corner has only ever been square.
                 t:SetColorTexture(cr, cg, cb, ca)
@@ -3803,7 +3803,7 @@ function color.apply(w, node, ctx)
             r = r0, g = g0, b = b0, opacity = a0,
             hasOpacity = node.alpha and true or false,
             swatchFunc = onChange, opacityFunc = onChange,
-            -- Through the funnel too: cancelling has to put the addon's
+            -- Through the funnel too: canceling has to put the addon's
             -- own state back, not just the swatch's. From OUR copy, not
             -- the table the picker passes: the shape of that table is
             -- the client's (it has carried `a` rather than `opacity`),
@@ -3973,7 +3973,7 @@ local textinput = {}
 
 local function SubmitLabel(node)
     -- `submit = true` takes the client's own word for it, so the default
-    -- is localised without this file carrying a string table.
+    -- is localized without this file carrying a string table.
     if node.submit == true then return OKAY or "Okay" end
     return tostring(node.submit)
 end
@@ -4547,6 +4547,33 @@ local function EnsureMulti(w)
     return host
 end
 
+-- `placeholder = "Search"`: gray text INSIDE the box while it is empty,
+-- where the panel's own search box (the client's SearchBoxTemplate) draws
+-- its "Search" -- so a field can say what it is without a label beside or
+-- above it. It follows the template's rule exactly: shown while the box is
+-- empty, focused or not, and gone the moment there is text.
+--
+-- Anchored to the box's CURRENT insets, read after UpdateSubmit has set
+-- them, so it starts where the caret does: after the magnifier on a search
+-- field, and stops short of a clear X or a submit button.
+--
+-- One-line only; a multi-line box has no use for it here. Put away on a
+-- pooled frame handed to a field that does not ask for one.
+local function UpdatePlaceholder(w, alpha)
+    local ph = w.placeholder
+    if not ph then return end
+    if not w.bpPlaceholderText or w.multi then ph:Hide(); return end
+    local box = w.box
+    if alpha then w.bpPlaceholderA = alpha end
+    ph:ClearAllPoints()
+    ph:SetPoint("LEFT",  box, "LEFT",  box.bpInsetL or TEXT_PAD, 0)
+    ph:SetPoint("RIGHT", box, "RIGHT", -(box.bpInsetR or TEXT_PAD), 0)
+    ph:SetText(w.bpPlaceholderText)
+    local m = w.bpSkinNow and w.bpSkinNow.textMuted
+    if m then ph:SetTextColor(m[1], m[2], m[3], w.bpPlaceholderA or 1) end
+    ph:SetShown((box:GetText() or "") == "")
+end
+
 -- Three things here are load-bearing for the CARET, and none is obvious.
 --
 -- The field spent a long time drawing its text with no cursor at all while
@@ -4710,6 +4737,7 @@ function textinput.apply(w, node, ctx)
         -- because a pasted string is the case that needs a bar at all.
         if w.multi then MultiContent(w) end
         UpdateSubmit(w, node, ctx)
+        UpdatePlaceholder(w)
         -- Only for text the USER typed. Every seed -- apply's, refresh's,
         -- the one a pick writes -- also fires this, and a flyout that
         -- reopened on its own answer would reappear over the list the pick
@@ -4731,6 +4759,7 @@ function textinput.apply(w, node, ctx)
             -- the next one.
             box:SetFocus()
             UpdateSubmit(w, node, ctx)
+            UpdatePlaceholder(w)
             UpdateSuggest(w, node, ctx)
         end)
         w.clear:SetScript("OnEnter", function(self)
@@ -4810,6 +4839,22 @@ function textinput.apply(w, node, ctx)
         w.searchIcon:Hide()
     end
 
+    -- The placeholder's string is remembered on the widget; its position
+    -- and visibility are UpdatePlaceholder's, run once the insets are known.
+    if node.placeholder and not w.multi then
+        if not w.placeholder then
+            w.placeholder = w.box:CreateFontString(nil, "OVERLAY")
+            ns.SetFontObject(w.placeholder, GameFontHighlightSmall)
+            w.placeholder:SetJustifyH("LEFT")
+            w.placeholder:SetWordWrap(false)
+        end
+        local t = node.placeholder
+        if type(t) == "function" then t = t(ctx) end
+        w.bpPlaceholderText = t and tostring(t) or nil
+    else
+        w.bpPlaceholderText = nil
+    end
+
     if wantSubmit and w.multi then
         -- The full-height button, in the row reserved UNDER the box
         -- (MultiFieldHeight), flush with the box's right edge: on a
@@ -4872,6 +4917,7 @@ function textinput.apply(w, node, ctx)
     if not w.multi and box.bpInsetGen ~= insetGen then
         box:SetText(box:GetText() or "")
     end
+    UpdatePlaceholder(w)
 end
 
 function textinput.refresh(w, node, ctx)
@@ -4945,6 +4991,8 @@ function textinput.refresh(w, node, ctx)
     if w.multi then MultiContent(w) end
 
     UpdateSubmit(w, node, ctx)
+    -- Dimmed with the rest of the field when it is disabled.
+    UpdatePlaceholder(w, a)
 end
 -- A one-line field prefers 200 and will take 120 at a squeeze, one row
 -- tall. A MULTI-LINE one takes the whole row -- 9999 is what a note asks

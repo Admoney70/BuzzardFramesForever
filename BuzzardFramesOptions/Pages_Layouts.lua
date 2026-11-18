@@ -76,6 +76,7 @@
 local BuzzardFramesOptions = _G.BuzzardFramesOptions
 
 local function BF() return _G.BuzzardFrames end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The layouts profile table. Everything on this section lives under it.
 local function Layouts()
@@ -380,9 +381,9 @@ function PAGES.management()
             -- The Ace Create sub-tab, as a card.
             { title = "Create", preset = "form", fields = {
                 -- Ace: createFlatType.
-                { control = "dropdown", label = "Type",
+                { control = "segmented", label = "Type",
                   desc = "Party Layouts are used for 5-player groups (Solo, "
-                      .. "Party, Dungeon, Arena). Raid Layouts are used "
+                      .. "Party, Dungeon, Delve, Arena). Raid Layouts are used "
                       .. "for raid groups and battlegrounds.",
                   options = { { value = "party", text = "Party" },
                               { value = "raid",  text = "Raid"  } },
@@ -726,10 +727,11 @@ local function GlobalSlotCards()
         }},
         { title = "Dungeon", preset = "form", fields = {
             SlotAssignField("dungeon", "Dungeon", "Layout used when you are in a 5-player dungeon or party."),
+            SlotAssignField("delve",   "Delve",   "Layout used when you are in a Delve."),
         }},
         { title = "Raid", preset = "form", fields = {
             SlotAssignField("raid20", "Raid (20 Man)", "Layout used when you are in a 20-player raid instance."),
-            SlotAssignField("raid25", "Raid (25 Man)", "Layout used when you are in a 25-player raid instance."),
+            SlotAssignField("raid25", "Raid (25 Man)", "Layout used when you are in a 25-player raid instance, such as Mythic Flex."),
             SlotAssignField("raid30", "Raid (30 Man)", "Layout used when you are in a 30-player raid instance."),
             SlotAssignField("raid40", "Raid (40 Man)", "Layout used when you are in a 40-player raid instance."),
         }},
@@ -746,6 +748,7 @@ end
 local function OverridesTable(kind, entryKey)
     local p = Layouts()
     if not p then return nil end
+    if kind == "class" then local FO = ForeverUI(); return FO and FO.LayoutClassTable(p, entryKey) or nil end -- [FOREVER]
     if kind == "role" then
         p.roleOverrides = p.roleOverrides or { HEALER = {}, TANK = {}, DAMAGER = {} }
         p.roleOverrides[entryKey] = p.roleOverrides[entryKey] or {}
@@ -818,6 +821,7 @@ local function RoleSpecMembers()
     local bf  = BF()
     local ro  = l.roleOverrides or {}
     local so  = l.specOverrides or {}
+    if ForeverUI() then so = {} end -- [FOREVER]
     local out = {}
     for _, def in ipairs(ROLE_DEFS) do
         if ro[def.key] and ro[def.key]._present then
@@ -843,6 +847,7 @@ local function RoleSpecMembers()
                           id = "spec_" .. sp.idStr,
                           title = "|T" .. sp.icon .. ":14|t " .. sp.name }
     end
+    if ForeverUI() then ForeverUI().AppendLayoutClassMembers(out, l) end -- [FOREVER]
     -- GLOBAL, always and always LAST: it is what every override above it
     -- falls back to, and a fallback belongs at the foot of the list rather
     -- than at its head. Not sourced from the profile like the others --
@@ -876,7 +881,8 @@ local function RoleSpecMemberPage(mctx)
                 -- than trailing it: it is a sentence to read, and at the
                 -- heading's size it competed with the name.
                 { control = "note", wide = true,
-                  text = "These settings are active unless an override "
+                  text = ForeverUI() and ForeverUI().TEXT.layoutsGlobal or -- [FOREVER]
+                      "These settings are active unless an override "
                       .. "exists for the current Role or Spec." },
             }},
         }
@@ -888,6 +894,7 @@ local function RoleSpecMemberPage(mctx)
     local badge = (item.kind == "role")
         and "|cff7f77ddRole override|r"
         or  "|cff1d9e75Spec override|r"
+    if item.kind == "class" and ForeverUI() then badge = ForeverUI().CLASS_BADGE end -- [FOREVER]
     local function Slot(slotKey, label)
         return OverrideSlotField(item.kind, item.entryKey, slotKey, label)
     end
@@ -904,6 +911,7 @@ local function RoleSpecMemberPage(mctx)
         }},
         { title = "Dungeon", preset = "form", fields = {
             Slot("dungeon", "Dungeon"),
+            Slot("delve",   "Delve"),
         }},
         { title = "Raid", preset = "form", fields = {
             Slot("raid20", "Raid (20 Man)"),
@@ -939,7 +947,8 @@ local function RoleSpecRootPage()
       groups = {
         { preset = "bare", fields = {
             { control = "note", wide = true,
-              text = "If conflicting Role and Spec overrides are defined "
+              text = ForeverUI() and ForeverUI().TEXT.layoutsPrecedence or -- [FOREVER]
+                  "If conflicting Role and Spec overrides are defined "
                   .. "(e.g. both Healer and Resto Shaman are defined and "
                   .. "have different settings), the Spec overrides take "
                   .. "priority." },
@@ -969,6 +978,7 @@ local function RoleSpecRootPage()
 
             -- Ace: addSpecDropdown. Specs without an entry, alphabetical
             -- by name.
+            ForeverUI() and ForeverUI().LayoutAddClassField() or -- [FOREVER]
             { control = "dropdown", label = "Add Spec Overrides",
               labelPlacement = "above",
               options = function()
@@ -1100,6 +1110,7 @@ function BuzzardFramesOptions:LayoutsRoleSpecRoute()
                 local bf = BF()
                 local p  = Layouts()
                 if not (bf and p) then return end
+                if kind == "class" then local FO = ForeverUI(); return FO and FO.LayoutClassAdd(bf, p, val) or nil end -- [FOREVER]
                 if kind == "role" then
                     p.roleOverrides = p.roleOverrides or { HEALER = {}, TANK = {}, DAMAGER = {} }
                     p.roleOverrides[val] = p.roleOverrides[val] or {}
@@ -1135,6 +1146,7 @@ function BuzzardFramesOptions:LayoutsRoleSpecRoute()
                 local bf = BF()
                 local p  = Layouts()
                 if not (bf and p) then return end
+                if item.kind == "class" then local FO = ForeverUI(); if FO then FO.LayoutClassRemove(bf, p, item.entryKey) end return end -- [FOREVER]
                 if item.kind == "role" then
                     if p.roleOverrides then p.roleOverrides[item.entryKey] = nil end
                 else

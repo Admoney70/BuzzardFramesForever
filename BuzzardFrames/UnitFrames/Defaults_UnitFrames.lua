@@ -63,7 +63,7 @@ BF.unitFrameDefaults = {
             -- Phase L (§L.6a): the raid40/30/20 buckets are GONE -- they
             -- have been unreachable since separateUFByGroupType was retired
             -- 2026-08-15 (GetUFAnchor/SetUFAnchor hardcode "party" as the
-            -- only live bucket). Do not reintroduce: AceDB materialised
+            -- only live bucket). Do not reintroduce: AceDB materialized
             -- them into every profile on every login.
             default = {
                 name   = "Default",

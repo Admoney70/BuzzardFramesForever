@@ -776,7 +776,8 @@ local function RaidGroupsCard()
         id = "autoHideGroupsByInstance", wide = true,
         default = d and d.autoHideGroupsByInstance,
         desc = "Hides raid groups based on the max players that can fit "
-            .. "in the current instance: Hides groups 5-8 in a 20-man "
+            .. "in the current instance: Hides groups 7-8 in a 30-man "
+            .. "raid, 6-8 in a 25-man Mythic Flex raid, 5-8 in a 20-man "
             .. "raid. All 8 groups are shown in Open world and 40-man "
             .. "raids.",
         disabled = "combat",
@@ -974,49 +975,11 @@ local function PetsCard()
                   end
               end },
 
-            { control = "switch", label = "Attach to Party",
-              id = "petAttachToParty",
-              default = d and d.petAttachToParty,
-              desc = "Place the pet frames right after the last party "
-                  .. "member, so a group of fewer than 5 leaves no gap. "
-                  .. "They follow the party's direction (below a column, "
-                  .. "beside a row).\n\n|cffaaaaaaThe game does not allow "
-                  .. "moving them in combat: if someone joins, leaves or "
-                  .. "summons a pet mid-fight, the pets move when combat "
-                  .. "ends. X/Y Position is not used while this is on.|r",
-              hidden = function() return not IsParty() end,
-              disabled = function()
-                  if InCombatLockdown() then return true end
-                  local flat = GetFlat()
-                  return not (flat and flat.showPetFrames)
-              end,
-              get = function()
-                  local flat = GetFlat()
-                  return flat and flat.petAttachToParty
-              end,
-              set = function(_, ctx, val)
-                  if InCombatLockdown() then return end
-                  local bf = BF()
-                  local flat = GetFlat()
-                  if not (bf and flat) then return end
-                  flat.petAttachToParty = val
-                  bf:InvalidateRaidProfileCache()
-                  if bf:ActiveMatchesModifying() then
-                      bf:RefreshPetHeaders()
-                  end
-                  if ctx and ctx.app then ctx.app:RefreshPage() end
-              end },
-
             -- Position and size as stacked PAIRS, the way the main block's
             -- are: two halves of one setting, set together. The X/Y binds
             -- keep PositionBind's soft bounds and the pet setters' own
             -- side effects (the header moves as the number changes).
-            { control = "pair", id = "petFramePosition",
-              disabled = function()
-                  if InCombatLockdown() then return true end
-                  local flat = GetFlat()
-                  return IsParty() and flat and flat.petAttachToParty and true or false
-              end,
+            { control = "pair", id = "petFramePosition", disabled = "combat",
               newRow = true,
               captions = { x = "X Position", y = "Y Position" },
               buttons = {
@@ -1045,25 +1008,6 @@ local function PetsCard()
                   y = { bind = "petFrameHeight", min = 10, max = 100, step = 1 },
               },
               onChange = PetHeadersEffect, refresh = "write" },
-
-            { control = "slider", label = "Buff Scale",
-              id = "petBuffScale", newRow = true,
-              default = (d and d.petBuffScale) or 60,
-              desc = "Size of the buff icons on pet frames, as a percent of "
-                  .. "the buff size on the player frames.",
-              min = 20, max = 150, step = 5, disabled = "combat",
-              get = function()
-                  local flat = GetFlat()
-                  return flat and (flat.petBuffScale or 60)
-              end,
-              set = function(_, _, val)
-                  if InCombatLockdown() then return end
-                  local bf = BF()
-                  local flat = GetFlat()
-                  if not (bf and flat) then return end
-                  flat.petBuffScale = val
-                  if bf.ApplyPetBuffScaleAll then bf:ApplyPetBuffScaleAll() end
-              end },
 
             -- Starts a line, so the two pairs above have one to themselves.
             { control = "stepper", label = "Frame Spacing",

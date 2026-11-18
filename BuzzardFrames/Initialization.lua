@@ -364,11 +364,14 @@ function BF:OnEnable()
         for i = 1, #names do
             local ind = self.indicators and self.indicators[names[i]]
             if not ind then
-                error("BuzzardFrames: aura indicator '" .. names[i]
-                    .. "' missing from BF.indicators at OnEnable. "
-                    .. "Check .toc includes the indicator file and that "
-                    .. "the file registers via BF:RegisterIndicator(...) "
-                    .. "at top-level (not in OnInitialize).")
+                -- Developer note (never shown to players): the indicator
+                -- file is missing from the .toc, or it does not register via
+                -- BF:RegisterIndicator(...) at top level (not in
+                -- OnInitialize). The component name stays in the message so
+                -- a bug report identifies it; the player is only asked to
+                -- reinstall.
+                error("Buzzard Frames didn't load correctly (missing component: "
+                    .. names[i] .. "). Please reinstall Buzzard Frames.")
             end
             ordered[i] = ind
         end
@@ -381,7 +384,7 @@ function BF:OnEnable()
     do
         local p = self.db and self.db.profile
         if p and p.showPowerBar then
-            if not p.showAllPowerBars and not p.showPowerBarHealers then
+            if not p.showAllPowerBars and not p.showPowerBarHealers and not p.showPowerBarBloodDK then
                 p.showPowerBarHealers = true
             end
             p.showPowerBar = nil  -- clear legacy key
@@ -827,6 +830,10 @@ function BF:PLAYER_ENTERING_WORLD(_, isInitialLogin, isReloadingUi)
     -- change. Same two hooks as the cast bar rebind above; idempotent.
     if self.IncomingCasts then self.IncomingCasts:RebindContext() end
 
+    -- Missing Raid Buff Instance Type condition: trackers exist only where a
+    -- Layout's condition is met. Same two hooks; no-op unless the bucket moved.
+    if self.RefreshMissingRaidBuffInstance then self:RefreshMissingRaidBuffInstance() end
+
     -- v64: LOGIN ROBUSTNESS for the Blizzard native dispel overlay.
     -- Deferred sweep running EXACTLY the settings-change refresh path
     -- (UpdateSettings + per-frame Layout/Update, idempotent) once the
@@ -863,6 +870,9 @@ function BF:ZONE_CHANGED_NEW_AREA()
 
     -- Incoming Casts context gate -- see the note on the PEW handler.
     if self.IncomingCasts then self.IncomingCasts:RebindContext() end
+
+    -- Missing Raid Buff Instance Type condition -- see the PEW handler.
+    if self.RefreshMissingRaidBuffInstance then self:RefreshMissingRaidBuffInstance() end
 
     -- v92: generation snapshot for the §6.5 safety net below. LoadLayout
     -- bumps _loadLayoutGeneration on entry and its deferred tail runs
@@ -931,8 +941,23 @@ function BF:GroupChanged()
         newGroupType = "solo"
     end
 
-    if self._groupType ~= newGroupType then
-        self._groupType = newGroupType
+    -- Grid2 parity (GridRoster.lua:403): the instance's type and capacity are
+    -- compared as fields in their own right, not folded into the tier key.
+    -- The tier alone is lossy: a 26-30 member raid resolves to "raid_raid30"
+    -- both from group size (open world, or GetInstanceInfo not yet reporting
+    -- the raid at PLAYER_ENTERING_WORLD) and from a 30-man flex instance's
+    -- maxPlayers. A build made on the first reading -- all 8 groups under
+    -- Auto Hide Groups by Instance Size -- was then never corrected by the
+    -- ZONE_CHANGED_NEW_AREA / GROUP_ROSTER_UPDATE that carried the real
+    -- capacity. With these terms that event re-fires GroupTypeChanged, and
+    -- ReloadLayout's autoCapChanged term does the rebuild.
+    local _, newInstType, _, _, newInstMax = GetInstanceInfo()
+    if self._groupType ~= newGroupType
+       or self._groupInstType ~= newInstType
+       or self._groupInstMax ~= newInstMax then
+        self._groupType     = newGroupType
+        self._groupInstType = newInstType
+        self._groupInstMax  = newInstMax
         self:GroupTypeChanged()
     end
 
@@ -1029,7 +1054,7 @@ function BF:_GroupTypeChangedExecute()
         -- 5-man party), no prior ApplyProfile has run, so headers
         -- don't exist yet for UpdateVisibility / the header :Hide()
         -- loop below to act on. Do a one-shot ReloadLayout(true) to
-        -- materialise them. On subsequent reloads / context changes,
+        -- materialize them. On subsequent reloads / context changes,
         -- _lastAppliedFlat will be set and this guard is a no-op.
         if self._lastAppliedFlat == nil and (not self.groupsUsed or #self.groupsUsed == 0) then
             self:ReloadLayout(true)

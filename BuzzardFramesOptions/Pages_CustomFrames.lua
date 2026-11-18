@@ -29,6 +29,7 @@ local BuzzardFramesOptions = _G.BuzzardFramesOptions
 -- Frames - Size & Position page below is rendered under a custom frame
 -- group scope and asks the proxy which flat it is editing.
 local function BF() return BuzzardFramesOptions:BF() end
+local function ForeverUI() local bf = BF(); return bf and bf.isForever and BuzzardFramesOptions.ForeverUI or nil end -- [FOREVER]
 
 -- The CFG grid fallbacks (what a nil maxColumns / unitsPerColumn means),
 -- from the main addon's BF:GetCFGGridDims. Asked rather than copied: the
@@ -668,7 +669,8 @@ local function GroupCards(flatID)
     do
         local bf = BF()
         local fields = {}
-        for _, cls in ipairs((bf and bf.CLASS_SORT_ORDER_ALPHA) or {}) do
+        local foreverOrder = ForeverUI() and ForeverUI().ClassSortOrderAlpha() -- [FOREVER]
+        for _, cls in ipairs(foreverOrder or (bf and bf.CLASS_SORT_ORDER_ALPHA) or {}) do -- [FOREVER]
             local token = cls
             fields[#fields + 1] = {
                 control = "switch", label = ClassLabel(token),
@@ -677,6 +679,7 @@ local function GroupCards(flatID)
                 hidden = function()
                     local g = G()
                     if not g then return true end
+                    if ForeverUI() then return ForeverUI().CustomFrameClassHidden(g, token) end -- [FOREVER] any class can take any role on Forever
                     if g.roleFilterEnabled and g.roleFilter then
                         local rf = g.roleFilter
                         if rf.MAINTANK or rf.MAINASSIST then return false end
@@ -836,7 +839,7 @@ local function GroupCards(flatID)
               g.groupBy = (v ~= "NONE") and v or nil
               ReloadCustomFrames()
           end },
-        { control = "dropdown", label = "Sort Method", id = "sortMethod",
+        { control = "segmented", label = "Sort Method", id = "sortMethod",
           labelPlacement = "above", default = "INDEX", disabled = "combat",
           desc = "How units are sorted within each sub-group, or overall when "
               .. "Group By is None.",
@@ -857,7 +860,7 @@ local function GroupCards(flatID)
     -- ── Sort By (name list mode) ──────────────────────────────
     cards[SLOT.nameSorting] = { title = "Sorting", preset = "form",
         reorderable = false, hidden = isRoleGroup, fields = {
-        { control = "dropdown", label = "Sort By", id = "nameListGroupBy",
+        { control = "segmented", label = "Sort By", id = "nameListGroupBy",
           labelPlacement = "above", default = "NONE", disabled = "combat",
           desc = "|cff00ff00Name List Order|r -- display in the order names "
               .. "were entered.\n|cff00ff00Class|r -- group units by class.",

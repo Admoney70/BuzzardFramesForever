@@ -4,6 +4,7 @@
 -- and management / display of custom buff containers.
 -- ============================================================
 local BF = LibStub("AceAddon-3.0"):GetAddon("BuzzardFrames")
+local IS_FOREVER = BF.isForever -- [FOREVER]
 
 -- v67: the GetUnitAuras / UnitIsVisible / GetActiveHeroTalentSpec upvalues were
 -- removed with BF:FetchBuffData and the secret-detection resolution -- nothing
@@ -18,7 +19,7 @@ local IsPlayerSpell = IsPlayerSpell
 
 -- ============================================================
 -- PREVIEW STATE API
--- Centralised preview mode for Aura Customizations options.
+-- Centralized preview mode for Aura Customizations options.
 -- Replaces scattered BF._previewing* flags with a single state
 -- table and explicit setters. Modes:
 --   nil              — no special preview (general auras tab)
@@ -81,6 +82,7 @@ function BF:SetBuffListPreview(specFilter, sbKey)
     local prevKey    = _pvState.sbKey
     _pvState.mode           = "buffList"
     _pvState.sbFilter       = tonumber(specFilter) or 0
+    if IS_FOREVER then _pvState.sbFilter = BF.Forever.NormalizeClassFilter(specFilter) end -- [FOREVER]
     _pvState.sbKey          = sbKey
     _pvState.containerIndex = nil
     _pvState.spellID        = nil
@@ -124,6 +126,7 @@ function BF:GetBuffListPreviewKey()     return _pvState.sbKey end
 
 -- Resto Druid swiftmendable spell IDs (spec 105). Shared with CustomContainers.lua.
 local SWIFTMENDABLE_IDS = { [774]=true, [8936]=true, [48438]=true, [155777]=true }
+if IS_FOREVER then SWIFTMENDABLE_IDS = BF.Forever.SWIFTMENDABLE_IDS end -- [FOREVER] Forever rank set
 BF.SWIFTMENDABLE_IDS = SWIFTMENDABLE_IDS
 -- Verdant Infusion talent: Swiftmend no longer requires a HoT, so every
 -- unit is always swiftmendable — the whole feature is moot. Gates the 12.1
@@ -266,22 +269,29 @@ function BF.GetClassRaidBuffIDs()
 end
 
 -- Returns the spell ID to pass to GetUnitAuraBySpellID for the given unit,
--- based on the player's class raid buff. Every Forever raid buff is a single
--- spell ID, so the unit does not change the answer.
--- Returns nil if the player class has no raid buff.
-function BF.GetRaidBuffLookupID(_unit)
+-- based on the player's class raid buff. Handles Evoker's per-class variants.
+-- Returns nil if the player class has no raid buff or the unit class is unknown.
+function BF.GetRaidBuffLookupID(unit)
     local playerClass = UnitClassBase and UnitClassBase("player")
     local classBuff   = playerClass and BF.CLASS_RAID_BUFF[playerClass]
+    if not classBuff then return nil end
     if type(classBuff) == "number" then
         return classBuff
+    else
+        -- Evoker: return the variant that applies to this unit's class.
+        -- 12.1: UnitClassBase returns a secret for identity-secret units —
+        -- a secret cannot be truth-tested or used as a table key, so bail
+        -- (no raid-buff lookup for that unit).
+        local unitClass = UnitClassBase and UnitClassBase(unit)
+        if unitClass == nil or issecretvalue(unitClass) then return nil end
+        return BF.EVOKER_BUFF_BY_CLASS[unitClass]
     end
-    return nil
 end
 
 -- ============================================================
 -- AURA FILTER HELPERS
 --
--- Long-term auras (raid buffs, sated, deserter) are always hidden
+-- Long-term auras (raid buffs, sated, deserter, skyriding) are always hidden
 -- in combat (they're noise during a fight) and shown out of combat only when
 -- the corresponding setting is enabled.
 -- spellId is only compared after canaccessvalue() confirms it's readable.
@@ -306,6 +316,18 @@ local function ShouldFilterDebuff(sid, p)
     if BF.DESERTER_SPELL_IDS[sid] then
         if InCombatLockdown() then return true end
         local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showDeserterDebuffs)
+    end
+    if BF.SKYRIDING_SPELL_IDS[sid] then
+        if InCombatLockdown() then return true end
+        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showSkyridingDebuffs)
+    end
+    if BF.ARCANE_EMPOWERMENT_SPELL_IDS[sid] then
+        if InCombatLockdown() then return true end
+        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showArcaneEmpowermentDebuffs)
+    end
+    if BF.TIME_TRIAL_SPELL_IDS[sid] then
+        if InCombatLockdown() then return true end
+        local _acp = BF.acDB and BF.acDB.profile; return not (_acp and _acp.showTimeTrialDebuffs)
     end
     return false
 end
@@ -418,6 +440,11 @@ local _fbsContainersWithSpecSpells = {}
 local _fbsSingleBuffSpell  = {}
 local _fbsSingleBuffHeld   = {}
 local _fbsSingleBuffHidden = {}
+-- R2 (Forever plan 15.2/17.1): _fbsSingleBuffSet[ci] = the entry's spell-ID MAP
+-- from BF:GetSingleBuffSpellSet, parallel to _fbsSingleBuffSpell (which keeps
+-- the PRIMARY id as the per-entry key). Retail: always { [sid] = true }.
+-- The map is the accessor's cached table -- read it, never write into it.
+local _fbsSingleBuffSet    = {}
 
 -- Per-container per-spec cooldown-text override flag: keyed by ci, true
 -- iff the container has at least one spell with per-spell cooldown-text
@@ -551,6 +578,8 @@ local CUSTOMIZATION_TABLES = {
     "specSpellColors", "specSpellBorders", "specSpellOverlays",
     "specSpellVisualAlert",  -- v49 Blizzard native visual alerts (retired v84)
     "specSpellIconEffect",   -- v84 Icon Effects (Stage 5 §9.9)
+    -- Duration Bar plan: Show Icon off, text in the icon's place, the bar.
+    "specSpellIconHidden", "specSpellTextInPlace", "specSpellBar",
 }
 -- Seeding version 3: a spell counts as "previously customized" when it
 -- has ANY per-spell entry at all — any record in any customization
@@ -706,6 +735,7 @@ local function EnsureFetchBuffSettings()
     table.wipe(_fbsSingleBuffSpell)
     table.wipe(_fbsSingleBuffHeld)
     table.wipe(_fbsSingleBuffHidden)
+    table.wipe(_fbsSingleBuffSet)
     local containers = BF:GetActiveCustomBuffContainers() or {}
     local currentGroupTypeKey = GetCurrentContainerGroupTypeKey()
     -- Pre-fetch per-spec cooldown-text override table for the per-container
@@ -801,14 +831,17 @@ local function EnsureFetchBuffSettings()
             -- "spec-gated for free" invariant these tables document, and put
             -- the 12.1 path back out of step with the legacy one (whose
             -- GetClaimedSpells is spec-gated).
+            -- R2: every rank ID of the entry (Retail: just sbSid).
+            local sbSet = sbSid and BF:GetSingleBuffSpellSet(c)
             if sbSid and c.singleBuffHidden then
                 if BF:IsSingleBuffSpecMet(c) then
-                    _fbsSingleBuffHidden[sbSid] = true
+                    for id in pairs(sbSet) do _fbsSingleBuffHidden[id] = true end
                 end
                 sbSid = nil
             end
             if sbSid and BF:IsSingleBuffSpecMet(c) then
                 _fbsSingleBuffSpell[ci] = sbSid
+                _fbsSingleBuffSet[ci]   = sbSet
                 -- v65: STAYS SET for a Buffs-anchored entry, and it is load-
                 -- bearing there. GetContainerBuffConfig reads it as
                 -- `elseif _fbsSingleBuffHeld[sid] then eligible = false` when
@@ -817,7 +850,7 @@ local function EnsureFetchBuffSettings()
                 -- and an Order is exactly what promotes a spell -- so without
                 -- this the same spell would get BOTH an sp<sid> group and its
                 -- sb<key> group: two icons for one aura.
-                _fbsSingleBuffHeld[sbSid] = true
+                for id in pairs(sbSet) do _fbsSingleBuffHeld[id] = true end
 
                 -- v65: a Buffs-anchored entry has no container of its own, so it
                 -- does not get a container group -- its aura is served by the
@@ -1021,12 +1054,15 @@ function BF:GetContainerBuffConfig()
     -- assignment used to. Only single buffs whose Spec condition passes are in
     -- _fbsSingleBuffSpell, so the claim lifts automatically on a spec the
     -- condition excludes.
+    -- R2: the entry's whole ID map (Retail: the one sid), keyed per entry.
     for ci, sid in pairs(_fbsSingleBuffSpell) do
-        cfg.generalExclude[sid] = true
-        haveExclude = true
         local set = cfg.containerSpells[ci]
         if not set then set = {}; cfg.containerSpells[ci] = set end
-        set[sid] = true
+        for id in pairs(_fbsSingleBuffSet[ci] or { [sid] = true }) do
+            cfg.generalExclude[id] = true
+            set[id] = true
+        end
+        haveExclude = true
     end
     -- v45: hidden spells (Display Type = Hide) are excluded from the
     -- general group in EVERY filter mode (covers non-whitelist modes,
@@ -1242,11 +1278,32 @@ function BF:GetContainerBuffConfig()
                         -- bars despite the entry saying Applied by Me Only).
                         e.scope = BF.GetContainerCasterScope
                             and BF.GetContainerCasterScope(c) or "mine"
+                        -- Combat Status likewise ("in" | "out" | nil =
+                        -- Always): the fx slot is parked on the combat edge
+                        -- the entry's icon is (BuffsAndContainers:Update).
+                        e.combat = BF.GetSingleBuffCombatMode
+                            and BF.GetSingleBuffCombatMode(c) or nil
+                        -- R2: the fx slot stays keyed by the PRIMARY id ("fx"..sid)
+                        -- and matches the winning entry's whole ID map. `sig`
+                        -- is that map's signature (the accessor's cached
+                        -- string): EnsureFxSlot re-stamps the slot's include
+                        -- map when it changes. Retail: always tostring(sid).
+                        e.ids = _fbsSingleBuffSet[ci]
+                        local _, idSig = BF:GetSingleBuffSpellSet(c)
+                        e.sig = idSig
                         cfg.frameFx[sid] = e
                     end
-                    if hc and not e.hc then e.hc = hc end
-                    if bd and not e.bd then e.bd = bd end
-                    if ov and not e.ov then e.ov = ov end
+                    -- One slot per spell carries ONE Combat Status, so a later
+                    -- same-spell entry adds its effects only when its
+                    -- condition matches the winner's; otherwise they would
+                    -- show and hide on a condition that is not theirs.
+                    local mode = BF.GetSingleBuffCombatMode
+                        and BF.GetSingleBuffCombatMode(c) or nil
+                    if mode == e.combat then
+                        if hc and not e.hc then e.hc = hc end
+                        if bd and not e.bd then e.bd = bd end
+                        if ov and not e.ov then e.ov = ov end
+                    end
                 end
             end
         end
@@ -1258,7 +1315,9 @@ function BF:GetContainerBuffConfig()
     -- BuffsAndContainers restamps consume them unchanged.
     cfg.swiftmendFx   = nil
     cfg.swiftmendName = nil
-    if specId2 == 105 and acP and not IsPlayerSpell(VERDANT_INFUSION) then
+    local smGate = specId2 == 105 and acP and not IsPlayerSpell(VERDANT_INFUSION)
+    if IS_FOREVER then smGate = acP and BF.Forever.IsSwiftmendableActive() end -- [FOREVER] Druid + Swiftmend
+    if smGate then
         local sm = acP.swiftmendFx
         if sm then
             local hc = sm.hc; if hc and hc.enabled == false then hc = nil end
@@ -1597,7 +1656,7 @@ end
 -- invisible in the options tree (nodes build from DEBUFF_CONTAINER_PRESETS)
 -- yet linger in the saved data forever. Currently: nonDispellable (removed
 -- 2026-08-14 — see the note above BF.DEBUFF_CONTAINER_PRESETS) and
--- allDispellable (v91, retired 2026-08-17 in favour of the by-Me / by-Others
+-- allDispellable (v91, retired 2026-08-17 in favor of the by-Me / by-Others
 -- split).
 --
 -- v91: allDispellable is MIGRATED before it is pruned, so a container that was
@@ -1701,6 +1760,33 @@ function BF:GetSingleBuffSpellID(c)
     local sid = c.singleBuffSpellID
     if type(sid) ~= "number" or sid <= 0 then return nil end
     return sid
+end
+
+-- R2 (Forever plan 15.2 / 17.1): the entry's spell-ID MAP and a stable
+-- signature of it -> map, sig (nil for a non-single-buff / pseudo / invalid
+-- entry, exactly when GetSingleBuffSpellID is nil).
+--
+-- Every single-ID site (include maps, claim/exclude sets, change guards) reads
+-- this instead of building { [sid] = true }; slot / group / fx KEYS stay per
+-- entry and keep using the primary id from GetSingleBuffSpellID. On Retail the
+-- map is { [sid] = true } and the signature tostring(sid) -- the same content
+-- every site built before -- cached per spell ID, so the shared map is built
+-- once and reused by every frame. On WoW Forever the map holds every rank ID
+-- (c.foreverSpellIDs) and is cached per entry in Forever_BuffList.lua.
+--
+-- The returned map is SHARED: callers pass it on or read it, never write it.
+local _sbMapBySid, _sbSigBySid = {}, {}
+function BF:GetSingleBuffSpellSet(c)
+    local sid = self:GetSingleBuffSpellID(c)
+    if not sid then return nil end
+    if IS_FOREVER then return BF.Forever.GetSingleBuffSpellSet(c, sid) end -- [FOREVER]
+    local map = _sbMapBySid[sid]
+    if not map then
+        map = { [sid] = true }
+        _sbMapBySid[sid] = map
+        _sbSigBySid[sid] = tostring(sid)
+    end
+    return map, _sbSigBySid[sid]
 end
 
 -- The spell ID a Buff List row DISPLAYS (icon, name, tree label, key mint).
@@ -1870,6 +1956,7 @@ function BF:IsSingleBuffSpecMet(c)
     -- v64 widening below (a container-level loadSpec) is retired; migration 80
     -- clears the keys, and a stray one is ignored here.
     if not c.singleBuff then return true end
+    if IS_FOREVER then return BF.Forever.IsClassConditionMet(c) end -- [FOREVER] Class condition
     if not c.loadSpec then return true end
     local spec = self.playerSpecID
     if spec == nil then return true end  -- unknown spec: fail open
@@ -2343,6 +2430,37 @@ function BF:CreateCustomBuffContainer(seed)
     return defaults, #containers
 end
 
+-- Review fix A1: every tier of a Single Buff's BAR store -- each spell's
+-- specSpellBar entry and each of its per-Layout groupSettings copies --
+-- handed to fn(tier, entry), in no particular order. The bar carries its
+-- own Anchor Point (a "C:<key>" flow host among its values), so every pass
+-- that rewrites or collects the entry's anchorPoint has to reach these too.
+--
+-- Reads the RAW store (c.sbVisuals), not GetSingleBuffVisualRoot: a rewrite
+-- has to fix the data even while the entry sits in "Show (Default Buff)"
+-- mode, or switching back to Customized would revive a dead reference.
+-- Callers that only care about what RENDERS gate on that themselves.
+local function VisitSingleBuffBarTiers(c, fn)
+    local root = type(c) == "table" and c.sbVisuals
+    local fam  = type(root) == "table" and root.specSpellBar
+    if type(fam) ~= "table" then return end
+    for _, map in pairs(fam) do
+        if type(map) == "table" then
+            for _, entry in pairs(map) do
+                if type(entry) == "table" then
+                    fn(entry, entry)
+                    if type(entry.groupSettings) == "table" then
+                        for _, gs in pairs(entry.groupSettings) do
+                            if type(gs) == "table" then fn(gs, entry) end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+BF.VisitSingleBuffBarTiers = VisitSingleBuffBarTiers
+
 function BF:RemoveCustomBuffContainer(index)
     local containers = self:GetCustomBuffContainers()
     if not containers[index] then return end
@@ -2435,6 +2553,11 @@ function BF:RemoveCustomBuffContainer(index)
                         end
                     end
                 end
+                -- Review fix A1: the entry's BAR has its own Anchor Point,
+                -- per entry and per Layout, so it falls back the same way.
+                VisitSingleBuffBarTiers(sc, function(tier)
+                    if tier.anchorPoint == sentinel then tier.anchorPoint = "BUFFS" end
+                end)
             end
         end
     end
@@ -2524,7 +2647,17 @@ end
 -- against _bf_curButtonSize / maxChanged, and ApplyBuffFilters gates the engine
 -- UpdateAllAuras rebuild on cfg.generation. A geometry-only edit therefore
 -- re-anchors, it does not rebuild.
-function BF:RefreshAllCustomContainers()
+--
+-- `withBigDefHost` (Duration Bar Stage 2 follow-up): the OPTION-EDIT callers
+-- (the Buff List's light refresh -- Icon Size, Text Area Size and their "Use
+-- Buffs Icon Size" switches -- see Pages_AuraContainers.lua -- and the light
+-- branch of BF:RefreshContainersDebounced) pass true, so a
+-- frame whose Big Defensive container hosts single buffs also re-runs
+-- BigDefIcons:Layout and its line budget follows the entry's new size on the
+-- SAME refresh (it is applied nowhere else on this path). Gated per frame by
+-- BF.BigDefHostNeedsRelayout and on combat. The event caller (DebuffIcons'
+-- spec/talent dispel refresh) passes nothing and is unchanged.
+function BF:RefreshAllCustomContainers(withBigDefHost)
     -- Vehicle defer (see Auras.lua): even the LIGHT path re-pushes group
     -- layout tables, and ANY group-config re-application while the player is
     -- in a vehicle corrupts candidate-table group assignment (owner-repro'd
@@ -2549,11 +2682,20 @@ function BF:RefreshAllCustomContainers()
         -- debuff-container array is empty, so this is free for profiles without
         -- any debuff containers.
         local debuffPrimary = self:GetIndicatorByName("debuffIcons")
+        local bigDefPrimary = withBigDefHost and not InCombatLockdown()
+            and self:GetIndicatorByName("bigDefIcons") or nil
         -- Grid2 rule: Layout every registered frame (spares included),
         -- Update the ones holding a unit.
         for _, frame in next, self.registeredFrames do
             if frame and not frame._isPreviewFrame then
                 if primary then primary:Layout(frame) end
+                -- After the buffs Layout: it re-derives this frame's
+                -- single-buff size memo, which the gate and the bigDef slack
+                -- both read.
+                if bigDefPrimary and BF.BigDefHostNeedsRelayout
+                   and BF.BigDefHostNeedsRelayout(frame) then
+                    bigDefPrimary:Layout(frame)
+                end
                 if debuffPrimary then debuffPrimary:Layout(frame) end
                 if frame.unit then self:UpdateFrameIndicators(frame, frame.unit) end
             end
@@ -2685,7 +2827,12 @@ function BF:RefreshContainersDebounced()
         if heavy then
             BF:RefreshAllCustomContainersWithRebuild()
         else
-            BF:RefreshAllCustomContainers()
+            -- true: also re-lay out Big Defensive on frames whose Big
+            -- Defensive hosts single buffs (gated per frame by
+            -- BF.BigDefHostNeedsRelayout, and on combat), the same as the Buff
+            -- List's RefreshContainersLight. The heavy branch needs nothing:
+            -- RefreshAllAuras already lays out every indicator.
+            BF:RefreshAllCustomContainers(true)
         end
     end)
 end
@@ -2766,7 +2913,7 @@ local function InvalidateContainerIconCaches()
             frame._bf_dotClear = nil
             frame._bf_bhClear = nil
             -- Header-derived caches (groupTypeKey, isCustom/Raid/Party flags,
-            -- containerHidden, activeGroups). Centralised in the helper so
+            -- containerHidden, activeGroups). Centralized in the helper so
             -- BFLayout.lua's header Reset() can use the same hook.
             if BF.ClearFrameHeaderDerivedCaches then
                 BF:ClearFrameHeaderDerivedCaches(frame)
@@ -2905,174 +3052,237 @@ function BF:InvalidateSpellColorCache()
     _spellColorVersion = _spellColorVersion + 1
 end
 
--- Symbiotic Relationship talent state. Read by EnsureMissingSymbioticTracker
--- to decide whether to register/unregister the symbiotic tracker. Refreshed
--- on PEW, spec change, and talent change by RebuildMissingRaidBuffCaches.
-BF._symbioticRelationshipTalented = false  -- true when 474750 is talented
-
 -- ============================================================
--- Single-Aura Tracker registration (Phase 2 of the missing-raid-buff
--- redesign, Docs/MISSING_RAID_BUFF_REDESIGN_PLAN.md).
+-- Missing Raid Buff tracker registration (2026-11-16 rewrite: one tracker
+-- PER BUFF, the Grid2 StatusAurasMissing shape -- one "mbuff-missing"
+-- status per buff, each looping its own ID set).
 --
--- Trackers register whenever the player's class supports a raid buff
--- (independent of the showMissingRaidBuff toggle). The indicator
--- (Indicators/MissingRaidBuff.lua) gates visible rendering on the
--- runtime toggle. This avoids re-registering trackers on every
--- toggle change AND lets the tracker silently maintain s.idx[unit]
--- so when the user flips the toggle on, the icon state is correct
--- immediately rather than needing the next UA per unit to populate.
+-- Which buffs: BF.MISSING_RAID_BUFFS (AuraCustomizations/TrackedAuras.lua;
+-- Forever swaps in Forever/Forever_SpellData.lua's list). A buff gets a
+-- tracker only when ALL of these hold, so a buff nobody is reminded of
+-- costs nothing per aura update:
+--   * it belongs to the player's class;
+--   * the player knows it (IsBuffKnown below);
+--   * at least one Layout has Show Missing Raid Buff on, the buff ticked in
+--     Enabled Buffs, and its Instance Type condition met where the player
+--     is standing (Grid2 GridStatusLoad.lua's load.instType, which disables
+--     the whole status outside the allowed instance types).
 --
--- Symbiotic tracker registers only when player is Druid AND talented.
--- Unregisters cleanly when talent flips false (s:Unregister sequence
--- in Statuses/SingleAuraTrackers.lua dispatches HideAll on every
--- frame so the icon hides immediately, no protected APIs).
+-- BF._missingRaidBuffTrackers is the ordered list the indicator
+-- (Indicators/MissingRaidBuff.lua) fills its icon slots from, in
+-- BF.MISSING_RAID_BUFFS order. Each record: { tracker = t, entry = e }.
+-- A record is removed from the list BEFORE its tracker unregisters, so the
+-- unregister's own redraw (SingleAuraTrackers.lua trackerProto:Unregister)
+-- already renders without it.
 --
--- Class change (e.g. /reload after class change): tracker.spellIds is
--- bound at register time, so on class change we unregister the existing
--- tracker and re-register a new one for the new class. The unregister
--- sequence wipes s.idx and dispatches HideAll; the new register's
--- backfill (UpdateAllAuras equivalent in the framework) sets s.idx
--- correctly for the new class buff across all roster units.
+-- Combat-safe throughout (no protected APIs), and the tracker framework is
+-- combat-inert on its own (SAT_ScanAndDispatch).
 -- ============================================================
-BF._missingRaidBuffTracker  = nil   -- SingleAuraTracker instance or nil
-BF._missingSymbioticTracker = nil
+BF._missingRaidBuffTrackers = {}
 
--- Returns the class currently used to scope the missing-raid-buff
--- tracker. nil for classes with no raid buff (Hunter, Paladin, Rogue,
--- Shaman, Warlock). When this changes, both
--- trackers must be torn down and rebuilt.
-local function GetTrackedPlayerClass()
-    local playerClass = UnitClassBase and UnitClassBase("player")
-    if not playerClass then return nil end
-    if not BF.CLASS_RAID_BUFF[playerClass] then return nil end
-    return playerClass
+-- The Buzzard Auras Load Conditions buckets (BuzzardAuras/TrackerState.lua
+-- ns.ResolveInstanceBucket), same keys, so the two addons' Instance Type
+-- grids mean the same thing. difficultyID 208 == Delves.
+local function ResolveInstanceBucket()
+    local inInstance, instanceType = IsInInstance()
+    if not inInstance or instanceType == "none" then return "world" end
+    if instanceType == "party" then return "dungeon" end
+    if instanceType == "raid"  then return "raid" end
+    if instanceType == "arena" then return "arena" end
+    if instanceType == "pvp"   then return "bg" end
+    if instanceType == "scenario" and not IS_FOREVER then -- [FOREVER] no delves on Forever
+        local difficultyID = select(3, GetInstanceInfo())
+        if difficultyID == 208 then return "delve" end
+    end
+    return "world"
+end
+BF.ResolveMissingRaidBuffInstanceBucket = ResolveInstanceBucket  -- tests / debug
+
+-- Last resolved bucket. Refreshed on PLAYER_ENTERING_WORLD and
+-- ZONE_CHANGED_NEW_AREA (BF:RefreshMissingRaidBuffInstance), never per aura.
+BF._mrbInstanceBucket = nil
+
+-- Instance Type condition for one icons section (a Layout's merged view).
+-- Storage convention is Buzzard Auras': an instance type counts only when
+-- its entry is explicitly true, so the condition switched on with nothing
+-- ticked matches nowhere.
+function BF.MissingRaidBuffInstanceMet(ip)
+    if not ip.missingRaidBuffLoadInstance then return true end
+    local t = ip.missingRaidBuffInstanceTypes
+    return type(t) == "table" and t[BF._mrbInstanceBucket or "world"] == true
+end
+local InstanceMet = BF.MissingRaidBuffInstanceMet
+
+-- Enabled Buffs tick for one icons section.
+function BF.MissingRaidBuffEnabled(ip, key)
+    local t = ip.missingRaidBuffs
+    return type(t) == "table" and t[key] == true
+end
+local BuffEnabled = BF.MissingRaidBuffEnabled
+
+-- Does the player know this buff? Retail: every buff is baseline except
+-- Symbiotic Relationship (a talent, knownSpell). Forever: any rank of the
+-- buff's set (Forever/Forever_SpellData.lua F.IsRaidBuffKnown).
+local function IsBuffKnown(entry)
+    if entry.knownSpell then
+        return (IsPlayerSpell and IsPlayerSpell(entry.knownSpell)) and true or false
+    end
+    if IS_FOREVER and entry.knownAny then return BF.Forever.IsRaidBuffKnown(entry) end -- [FOREVER]
+    return true
 end
 
--- Walks the global pseudo-layout AND every per-flat icons section, returning
--- true if `predicate` matches any of them. Mirrors RebindAbsorbStatuses's
--- anyFlatHas pattern at BFStatus.lua:1832. Used to gate tracker registration
--- on toggle state: a user with the feature off in every flat profile pays
--- zero per-UA cost, matching the v4.4.4 baseline.
-local function AnyFlatHasIconToggle(self, predicate)
+-- True if `predicate` holds for the global icons section or for any
+-- Layout's resolved icons view. Reads through GetSectionProfile, which
+-- answers with the per-subtab merged view, so a key a Layout's own copy
+-- does not hold falls back to the global as every render path sees it.
+-- Settings-time only.
+local function AnyLayoutIcons(self, predicate)
     local rpp = self.rpDB and self.rpDB.profile
     if not rpp then return false end
-    -- Global pseudo-layout.
     local ip = rpp.icons
     if ip and predicate(ip) then return true end
-    -- Per-flat overrides, only when per-layout-icons is on.
     local lp = rpp.layouts
-    -- 2026-08-24: icons toggles are per-subtab now; the coarse alias is
-    -- the right gate (false positive only costs the scan).
-    if BF:IsPerLayoutSection("icons") then
-        local fl = lp.flatLayouts
-        if fl then
-            for _, flat in pairs(fl) do
-                local fip = type(flat) == "table" and rawget(flat, "icons")
-                if fip and predicate(fip) then return true end
+    local fl = lp and lp.flatLayouts
+    if fl and self:IsPerLayoutSection("icons") then
+        for _, flat in pairs(fl) do
+            if type(flat) == "table" then
+                local view = self:GetSectionProfile("icons", flat)
+                if view and view ~= ip and predicate(view) then return true end
             end
         end
     end
     return false
 end
 
-local function EnsureMissingRaidBuffTracker(self, playerClass)
-    -- Toggle gate: register only when at least one flat has the feature on.
-    -- Without this, every Druid/Priest/Mage/Warrior paid for
-    -- the per-UA scan even with the feature globally off -- a real regression
-    -- vs v4.4.4 where the cache maintenance block in Buffs:UNIT_AURA bailed
-    -- early on `not (showMissingRaidBuff or showMissingSymbiotic)`.
-    local wantTracker = playerClass and AnyFlatHasIconToggle(self, function(ip)
-        return ip.showMissingRaidBuff and true or false
+local function WantsBuff(self, entry)
+    local key = entry.key
+    return AnyLayoutIcons(self, function(ip)
+        return ip.showMissingRaidBuff and BuffEnabled(ip, key) and InstanceMet(ip)
     end)
-
-    -- Tear down if class changed OR if the toggle is now off everywhere.
-    if self._missingRaidBuffTracker and (
-        self._missingRaidBuffTracker._bf_class ~= playerClass
-        or not wantTracker
-    ) then
-        self._missingRaidBuffTracker:Unregister()
-        self._missingRaidBuffTracker = nil
-    end
-
-    if not wantTracker then return end
-    if self._missingRaidBuffTracker then return end  -- already registered for this class
-    if not BF.SingleAuraTracker then return end      -- framework not loaded (shouldn't happen)
-
-    local classBuff = BF.CLASS_RAID_BUFF[playerClass]
-    local tracker = BF.SingleAuraTracker:new("missingRaidBuff")
-    tracker._bf_class = playerClass  -- private: track which class this was built for
-    tracker:AddSpellId(classBuff)    -- AddSpellId accepts number or table of numbers
-    -- Bind the indicator. May not exist yet at very early load -- if so,
-    -- the indicator's RegisterIndicator call later won't notify the tracker;
-    -- we look up by name now and bind once. Indicator is registered at
-    -- Indicators/MissingRaidBuff.lua:199 (before this code runs at PEW).
-    local indicator = BF.indicators and BF.indicators.missingRaidBuff
-    if indicator then tracker:BindIndicator(indicator) end
-    tracker:Register()
-    self._missingRaidBuffTracker = tracker
 end
 
-local function EnsureMissingSymbioticTracker(self)
-    -- Symbiotic tracker exists only when:
-    --   1. Player is a talented Druid (BF._symbioticRelationshipTalented), AND
-    --   2. At least one flat profile has showMissingSymbiotic on.
-    -- The toggle gate matches the main raid-buff tracker: users with the
-    -- feature off pay zero per-UA cost.
-    local wantTracker = self._symbioticRelationshipTalented
-                    and AnyFlatHasIconToggle(self, function(ip)
-                        return ip.showMissingSymbiotic and true or false
-                    end)
-
-    if self._missingSymbioticTracker and not wantTracker then
-        -- Talent loss OR toggle flipped off: unregister cleanly. The
-        -- framework's Unregister sequence wipes s.idx, removes from the
-        -- Trackers list, then dispatches the bound indicator on every
-        -- frame currently showing the player so the icon hides immediately
-        -- without waiting for the next UA. Combat-safe.
-        self._missingSymbioticTracker:Unregister()
-        self._missingSymbioticTracker = nil
-        return
-    end
-
-    if not wantTracker then return end
-    if self._missingSymbioticTracker then return end
-    if not BF.SingleAuraTracker then return end
-
-    local tracker = BF.SingleAuraTracker:new("missingSymbiotic")
-    tracker.personalOnly = true           -- player-only scan/dispatch
-    tracker:AddSpellId(474754)            -- Symbiotic Relationship buff
+local function NewTracker(entry)
+    local tracker = BF.SingleAuraTracker:new("missingRaidBuff:" .. entry.key)
+    tracker:AddSpellId(entry.ids)    -- number, Evoker variant set, or Forever rank set
+    if entry.personal then tracker.personalOnly = true end
     local indicator = BF.indicators and BF.indicators.missingRaidBuff
     if indicator then tracker:BindIndicator(indicator) end
-    tracker:Register()
-    self._missingSymbioticTracker = tracker
+    return tracker
 end
 
--- Public: re-sync both trackers against current class + talent + toggle state.
--- Idempotent. Safe to call from PEW, spec change, talent change, option-
--- toggle flips, or any other state-shift point. Combat-safe (no protected
--- APIs in the register/unregister paths).
+-- Public: re-sync the tracker list against class, known spells, settings
+-- and instance. Idempotent. Called from PEW / zone change, talent and spell
+-- changes, and every Missing Raid Buff option that changes WHICH buffs are
+-- wanted.
 function BF:EnsureMissingRaidBuffTrackers()
-    local playerClass = GetTrackedPlayerClass()
-    EnsureMissingRaidBuffTracker(self, playerClass)
-    EnsureMissingSymbioticTracker(self)
+    if not BF.SingleAuraTracker then return end
+    if self._mrbInstanceBucket == nil then self._mrbInstanceBucket = ResolveInstanceBucket() end
+    local playerClass = UnitClassBase and UnitClassBase("player")
+    local all  = BF.MISSING_RAID_BUFFS or {}
+    local list = self._missingRaidBuffTrackers
+
+    local want = {}
+    for i = 1, #all do
+        local e = all[i]
+        if e.class == playerClass and IsBuffKnown(e) and WantsBuff(self, e) then
+            want[e.key] = e
+        end
+    end
+
+    -- Drop what is no longer wanted: out of the list first, then unregister.
+    local keep = {}
+    for i = #list, 1, -1 do
+        local rec = list[i]
+        if want[rec.entry.key] == rec.entry then
+            keep[rec.entry.key] = rec
+        else
+            table.remove(list, i)
+            rec.tracker:Unregister()
+        end
+    end
+
+    -- Rebuild in BF.MISSING_RAID_BUFFS order (the slot order), registering
+    -- the new ones once they are in the list.
+    for i = #list, 1, -1 do list[i] = nil end
+    local added
+    for i = 1, #all do
+        local e = all[i]
+        if want[e.key] then
+            local rec = keep[e.key]
+            if not rec then
+                rec = { tracker = NewTracker(e), entry = e }
+                added = added or {}
+                added[#added + 1] = rec.tracker
+            end
+            list[#list + 1] = rec
+        end
+    end
+    if added then
+        for i = 1, #added do added[i]:Register() end
+    end
 end
 
--- Refresh symbiotic talent state and (re)sync the trackers. Called on PEW,
--- spec change, and PLAYER_TALENT_UPDATE. The tracker framework handles
--- texture-deferred registration internally via SPELLS_CHANGED retry.
+-- Instance changed (PEW / ZONE_CHANGED_NEW_AREA): re-resolve the bucket and,
+-- only when it moved, re-sync the trackers and redraw -- a Layout set to
+-- Always keeps a tracker alive while another Layout's own condition flips,
+-- so the indicator re-checks its per-Layout gate too.
+function BF:RefreshMissingRaidBuffInstance()
+    local b = ResolveInstanceBucket()
+    if b == self._mrbInstanceBucket then return end
+    self._mrbInstanceBucket = b
+    self:EnsureMissingRaidBuffTrackers()
+    local ind = BF.indicators and BF.indicators.missingRaidBuff
+    if ind and ind.UpdateAllFrames then ind:UpdateAllFrames() end
+end
+
+-- Talent / spec change (PLAYER_TALENT_UPDATE, OnPlayerSpecChanged): the
+-- known set may have moved (Symbiotic Relationship is a talent).
 local function RebuildMissingRaidBuffCaches(self)
-    local playerClass = UnitClassBase and UnitClassBase("player")
-    if playerClass == "DRUID" then
-        self._symbioticRelationshipTalented = IsPlayerSpell and IsPlayerSpell(474750) or false
-    else
-        self._symbioticRelationshipTalented = false
-    end
     BF:EnsureMissingRaidBuffTrackers()
 end
 BF.RebuildMissingRaidBuffCaches = RebuildMissingRaidBuffCaches  -- exposed for talent handler
 
+-- [FOREVER] begin
+-- WoW Forever: buffs are trained (and Divine Spirit is a talent), so the
+-- known set moves on SPELLS_CHANGED. Re-sync only when it actually moved
+-- (a bitmask over the class's buffs), and never in combat -- defer to the
+-- regen edge, the Forever_Dispel.lua pattern.
+if IS_FOREVER then
+    local owner = BF:EventOwner("missingRaidBuffKnown")
+    local lastMask, pending
+    local function CheckKnown()
+        local cls = UnitClassBase and UnitClassBase("player")
+        local mask, all = 0, BF.MISSING_RAID_BUFFS or {}
+        for i = 1, #all do
+            local e = all[i]
+            if e.class == cls then
+                mask = mask * 2 + (IsBuffKnown(e) and 1 or 0)
+            end
+        end
+        if mask == lastMask then return end
+        lastMask = mask
+        BF:EnsureMissingRaidBuffTrackers()
+    end
+    local function OnRegen(o)
+        o:Unsub("PLAYER_REGEN_ENABLED")
+        pending = false
+        CheckKnown()
+    end
+    owner:Sub("SPELLS_CHANGED", function(o)
+        if InCombatLockdown() then
+            if not pending then
+                pending = true
+                o:Sub("PLAYER_REGEN_ENABLED", OnRegen, "unitless")
+            end
+            return
+        end
+        CheckKnown()
+    end, "unitless")
+end
+-- [FOREVER] end
+
 function BF:OnPlayerSpecChanged()
-    local specIndex = GetSpecialization()
+    local specIndex = (not IS_FOREVER) and GetSpecialization() or nil -- [FOREVER] B1: no spec read
     if specIndex then
         local id, _, _, _, role = GetSpecializationInfo(specIndex)
         self.playerSpecID   = id
@@ -3119,6 +3329,10 @@ local function buildClaimedCacheKey(containers, assign, defaultUntracked)
         -- claim lifts -- the moment the condition stops matching.
         local sbSid = BF:GetSingleBuffSpellID(c)
         if sbSid and BF:IsSingleBuffSpecMet(c) then
+            -- R2: the ID-map signature, not the primary id, so an edit to the
+            -- entry's rank set moves the key (Retail: tostring(sid), the same
+            -- text the concatenation produced before).
+            local _, sbSig = BF:GetSingleBuffSpellSet(c)
             -- v65: the Buffs anchor must be IN the key. GetClaimedSpells now
             -- decides whether to claim this spell partly from that flag, so a
             -- key that ignored it would keep serving a memoised claim set from
@@ -3135,7 +3349,7 @@ local function buildClaimedCacheKey(containers, assign, defaultUntracked)
             -- across deletions, unlike ci) and the host kind otherwise.
             local h = BF:GetSingleBuffAnchorHost(c,
                 GetCurrentContainerGroupTypeKey())
-            parts[#parts + 1] = "s" .. i .. ":" .. sbSid
+            parts[#parts + 1] = "s" .. i .. ":" .. sbSig
                 .. (h and (":" .. (h.key or h.kind)) or "")
         end
     end
@@ -3236,6 +3450,20 @@ local function CollectAnchoredContainerKeys(containers)
             end
         end
     end
+    -- Review fix A1: a BAR flowing into a container needs that container to
+    -- exist exactly as an icon does -- a container hosting only a bar would
+    -- otherwise never be created. Unioned across tiers the same way; a tier
+    -- counts only while its effective Show Bar (tier, else entry) is on.
+    -- Display-tab redesign: NOT gated on Customize Buff any more -- the bar
+    -- is its own customization and renders for an uncustomized entry too.
+    -- A per-Layout copy is only read while separateGroupConfig is on, and a
+    -- field it leaves nil is the entry's (GetSpellBar / barField).
+    local function takeBar(tier, entry)
+        if tier ~= entry and not entry.separateGroupConfig then return end
+        local show = tier.showBar
+        if show == nil then show = entry.showBar end
+        if show == true then take(tier.anchorPoint or entry.anchorPoint) end
+    end
     for _, c in ipairs(containers) do
         if type(c) == "table" and c.singleBuff and BF:IsSingleBuffSpecMet(c) then
             take(c.anchorPoint)
@@ -3244,6 +3472,7 @@ local function CollectAnchoredContainerKeys(containers)
                     if type(gs) == "table" then take(gs.anchorPoint) end
                 end
             end
+            VisitSingleBuffBarTiers(c, takeBar)
         end
     end
     if not list then return nil, "" end
@@ -3354,6 +3583,11 @@ function BF:InvalidateClaimedSpellCache()
             self:InvalidateBuiltFrameContainerLatches()
         end
     end
+    -- Combat Status (a Buff List entry condition): subscribe the combat-edge
+    -- listener only while some entry uses it, and re-index which entries it
+    -- hides. After InvalidateActiveContainersCache, for the same reason as the
+    -- relevance rebuild above. Lives in Indicators/BuffsAndContainers.lua.
+    if self.RefreshSingleBuffCombatWatch then self:RefreshSingleBuffCombatWatch() end
     -- Rebuild SotF per-container + regular-buffs-skip flags. Must run
     -- after InvalidateActiveContainersCache (so GetActiveCustomBuffContainers
     -- returns fresh data) and relies on GetTrackList / GetClaimedSpells
@@ -3435,9 +3669,9 @@ function BF:GetClaimedSpells()
             -- was `singleBuffHidden or <flag> or not IsSingleBuffBuffsAnchored`,
             -- i.e. unconditionally true here, so both the hidden-entry override
             -- and the Buffs-anchored exemption are gone.
-            local sbSid = BF:GetSingleBuffSpellID(c)
-            if sbSid and BF:IsSingleBuffSpecMet(c) then
-                set[sbSid] = true
+            local sbSet = BF:GetSingleBuffSpellSet(c)
+            if sbSet and BF:IsSingleBuffSpecMet(c) then
+                for id in pairs(sbSet) do set[id] = true end
             end
         end
     end
@@ -3540,7 +3774,7 @@ function BF:PreallocateContainerPools(frame)
     if not frame then return end
     if InCombatLockdown() then return end
     local specId = self.playerSpecID
-    if not specId then return end
+    if not specId and not IS_FOREVER then return end -- [FOREVER] no spec on Forever; still pre-size
     local containers = self:GetActiveCustomBuffContainers()
     if not containers or #containers == 0 then return end
 
@@ -3904,6 +4138,15 @@ function BF:GetSingleBuffAnchorHost(c, groupTypeKey)
     if type(c) ~= "table" or not c.singleBuff then return nil end
     local gs = ResolveGroupSource(c, groupTypeKey)
     local v  = (gs and gs.anchorPoint ~= nil) and gs.anchorPoint or c.anchorPoint
+    return self:GetFlowHostForValue(v)
+end
+
+-- Duration Bar plan §5.5 (Stage 4): the value half of the resolver above, for
+-- an anchor value that does not live on the entry's own anchorPoint -- a
+-- flow-hosted BAR's Anchor Point (specSpellBar.anchorPoint). Same sentinels,
+-- same interned descriptors, same "C:<key>" fallback to the Buffs host; a
+-- frame point (or "DEBUFFS", which no buff host answers) is nil.
+function BF:GetFlowHostForValue(v)
     if v == "BUFFS"  then return HOST_BUFFS  end
     if v == "BIGDEF" then return HOST_BIGDEF end
     local key = type(v) == "string" and v:match("^C:(.+)$")
@@ -4089,6 +4332,31 @@ function BF:ResolveContainerGeometry(c, groupTypeKey, ac, kind)
         spacing    = s.spacing    or c.spacing    or baseSpacing    or 1
         rowSpacing = s.rowSpacing or c.rowSpacing or baseRowSpace or 0
     end
+    -- Duration Bar plan §5.3: TEXT AREA SIZE. An entry whose icon is off and
+    -- whose duration text stands in its place ("text" mode) is sized by its
+    -- OWN pair of fields instead of buffSize, so the icon's size survives
+    -- untouched for when Show Icon comes back on. The exact twin of the size
+    -- branch above: textAreaUsesBuffSize mirrors containerUsesBuffSettings
+    -- (nil == inherit the section size), through the same per-Layout tier
+    -- `s`. An unset textAreaSize falls back to the entry's own buffSize and
+    -- then to 12 -- the same chain the options slider shows. Resolved HERE,
+    -- the one size resolver, so the slot size, the flow group's mult, the
+    -- host wrap budget and every preview read the same number. Since the
+    -- Display-tab redesign an entry that is NOT customized reaches it too
+    -- (Show Icon / Text in place are not icon customizations), and gets its
+    -- Text Area Size here over the useBuff answer above. Only the SIZE moves:
+    -- spacing / max icons keep the icon branch's answer.
+    if c.singleBuff and BF.GetSingleBuffIconMode
+       and BF.GetSingleBuffIconMode(c, groupTypeKey, ac) == "text" then
+        local useText = s.textAreaUsesBuffSize
+        if useText == nil then useText = c.textAreaUsesBuffSize end
+        if useText ~= false then
+            size = baseRounded or BF:PixelRound(baseSize or 12)
+        else
+            size = BF:PixelRound(s.textAreaSize or c.textAreaSize
+                or s.buffSize or c.buffSize or 12)
+        end
+    end
     -- v74 PERF: a single buff holds exactly ONE spell by construction, but a
     -- "Show (Default Buff)" entry inherits the section's Max Buffs (typically
     -- 8) as its maxIcons -- and the engine pre-creates that many fully-styled
@@ -4248,7 +4516,7 @@ BF.CONTAINER_PRESET_ORDER = { "important", "bigdef", "externaldef", "appliedbyme
 -- preset key from saved profiles.
 -- v70: previewIcon — see the note on BF.CONTAINER_PRESETS above. Options
 -- preview painter only.
--- v91 (owner ruling 2026-08-17): allDispellable is RETIRED in favour of
+-- v91 (owner ruling 2026-08-17): allDispellable is RETIRED in favor of
 -- othersDispellable, mirroring the main row's Dispellable by Me / by Others
 -- split. "All dispellable" is now expressible as the two presets side by side,
 -- and the split is what lets a container take exactly the arm the user means.
@@ -4303,24 +4571,14 @@ BF.BUFFS_PRESETS = {
     none                = { name = "No Preset - Whitelist Only",         filter = nil },
     helpful_player      = { name = "Helpful | Player",                   filter = "HELPFUL|PLAYER" },
     player_raid         = { name = "Helpful | Player | Raid",            filter = "HELPFUL|PLAYER|RAID" },
+    player_raid_combat  = { name = "Helpful | Player | Raid_In_Combat",  filter = "HELPFUL|PLAYER|RAID_IN_COMBAT" },
     helpful_raid        = { name = "Helpful | Raid",                     filter = "HELPFUL|RAID" },
-    -- Forever: the RAID_IN_COMBAT token matches nothing there (the Classic-era
-    -- spell data does not carry the "show on raid frames in combat" flag), so
-    -- the two _combat presets are hidden from every list and filter like their
-    -- plain RAID twins. The keys stay so a saved value still resolves to
-    -- something that works; the Forever seed rewrites them anyway.
-    player_raid_combat  = { name = "Helpful | Player | Raid",            filter = "HELPFUL|PLAYER|RAID" },
-    helpful_raid_combat = { name = "Helpful | Raid",                     filter = "HELPFUL|RAID" },
+    helpful_raid_combat = { name = "Helpful | Raid_In_Combat",           filter = "HELPFUL|RAID_IN_COMBAT" },
 }
 BF.BUFFS_PRESET_ORDER = {
     "none",
-    "helpful_player", "player_raid",
-    "helpful_raid",
-}
--- Forever: retired preset key -> the key that replaces it.
-BF.BUFFS_PRESET_FOREVER_REMAP = {
-    player_raid_combat  = "player_raid",
-    helpful_raid_combat = "helpful_raid",
+    "helpful_player", "player_raid", "player_raid_combat",
+    "helpful_raid", "helpful_raid_combat",
 }
 
 -- ── v65: ONE global preset, with ROLE and SPEC overrides ──────────────────
@@ -4343,10 +4601,7 @@ BF.BUFFS_PRESET_FOREVER_REMAP = {
 -- Exactly ONE preset applies at a time. That is the change from the earlier
 -- set-of-presets model: a filter is a single choice, and combining several was
 -- expressive but had no way to say "this one instead of that one on this spec".
--- Forever: HELPFUL|PLAYER|RAID. The retail default (player_raid_combat)
--- relies on the RAID_IN_COMBAT token, which matches nothing on Forever and
--- left the buff row empty.
-BF.BUFFS_DEFAULT_PRESET = "player_raid"
+BF.BUFFS_DEFAULT_PRESET = "player_raid_combat"
 
 function BF:GetBuffsGlobalPreset()
     local t = self:GetBuffsPresetContainer()
@@ -4362,6 +4617,14 @@ function BF:ResolveBuffsPreset()
     local t = self:GetBuffsPresetContainer()
     if not t then return BF.BUFFS_DEFAULT_PRESET end
 
+    -- [FOREVER] begin
+    -- D3: class -> role -> global on Forever (playerSpecID is nil there, so the
+    -- spec arm below never matches).
+    if IS_FOREVER then
+        local fp = BF.Forever.ResolveBuffsClassPreset(t)
+        if fp then return fp end
+    end
+    -- [FOREVER] end
     local specIDStr = self.playerSpecID and tostring(self.playerSpecID)
     if specIDStr and t.specOverrides then
         local e = t.specOverrides[specIDStr]
@@ -4453,7 +4716,7 @@ local function EnsureBuffsPresetsSeeded(p)
         p._buffsPresetsSeededV65 = nil
     end
 
-    -- Seed 2 (2026-08-15): healers default to the "none"
+    -- Seed 2 (2026-08-15): healers and Augmentation default to the "none"
     -- preset, which makes the Whitelist the source of truth for those specs.
     --
     -- This replaces the retired per-spec filter key. That key stored a Filter
@@ -4463,9 +4726,9 @@ local function EnsureBuffsPresetsSeeded(p)
     -- intent for every one of those specs, through the mechanism that is
     -- actually still read.
     --
-    -- ONE entry (Forever: the retail Augmentation Evoker spec override is
-    -- gone with the class): the HEALER role override covers every healer
-    -- spec.
+    -- TWO entries, not nine (owner decision): the HEALER role override covers
+    -- all seven healer specs, and Augmentation Evoker needs its own spec
+    -- override because its role is DAMAGER, so the role arm never sees it.
     -- Known gap, accepted: ResolveBuffsPreset resolves the role from
     -- UnitGroupRolesAssigned("player") (falling back to the spec's own role),
     -- so a healer ASSIGNED to a DPS slot in a group falls through the role
@@ -4475,60 +4738,19 @@ local function EnsureBuffsPresetsSeeded(p)
     -- means a deliberate choice, including one deliberately set to something
     -- other than "none". `_present` is what makes an override visible and
     -- editable in the overrides tree, so both entries show up in the UI.
-    --
-    -- Forever: NOT seeded. "none" means "whitelist only", and the whitelist is
-    -- the curated retail healer spell list (BF.SPEC_SPELLS), whose IDs do not
-    -- match Forever's spells -- so a healer saw no buffs at all. The flag is
-    -- still set so the seed never runs later.
     if not p._buffsHealerNoneOverridesSeeded then
         p._buffsHealerNoneOverridesSeeded = true
         t.roleOverrides = t.roleOverrides or {}
+        if type(t.roleOverrides.HEALER) ~= "table" then
+            t.roleOverrides.HEALER = { preset = "none", _present = true }
+        end
+        if IS_FOREVER then return end -- [FOREVER] never writes the Retail specOverrides key (no Evoker there); nothing follows in this function
         t.specOverrides = t.specOverrides or {}
-    end
-
-    -- Forever seed (own flag, runs once per profile): undo the two retail
-    -- defaults above on profiles that already received them, but ONLY where
-    -- the value is still exactly what the seed wrote -- anything the user
-    -- picked themselves is left alone.
-    if not p._buffsPresetsForever1 then
-        p._buffsPresetsForever1 = true
-        local h = t.roleOverrides and t.roleOverrides.HEALER
-        if type(h) == "table" and h.preset == "none" then
-            t.roleOverrides.HEALER = nil
-        end
-    end
-
-    -- Forever seed 2 (own flag): move every retired RAID_IN_COMBAT preset onto
-    -- its plain RAID twin -- the global choice, role/spec overrides and the
-    -- preset sets of custom buff containers. "helpful_player", the previous
-    -- Forever default, also moves to the new default; a value the user picked
-    -- after this seed ran is never touched again.
-    if not p._buffsPresetsForever2 then
-        p._buffsPresetsForever2 = true
-        local remap = BF.BUFFS_PRESET_FOREVER_REMAP
-        if t.globalPreset == nil or t.globalPreset == "helpful_player"
-           or remap[t.globalPreset] then
-            t.globalPreset = BF.BUFFS_DEFAULT_PRESET
-        end
-        for _, tbl in ipairs({ t.roleOverrides or {}, t.specOverrides or {} }) do
-            for _, e in pairs(tbl) do
-                if type(e) == "table" and e.preset and remap[e.preset] then
-                    e.preset = remap[e.preset]
-                end
-            end
-        end
-        if type(p.customBuffContainers) == "table" then
-            for _, c in pairs(p.customBuffContainers) do
-                local set = type(c) == "table" and c.presets
-                if type(set) == "table" then
-                    for old, new in pairs(remap) do
-                        if set[old] ~= nil then
-                            if set[new] == nil then set[new] = set[old] end
-                            set[old] = nil
-                        end
-                    end
-                end
-            end
+        -- 1473 = Augmentation Evoker. String key: ResolveBuffsPreset indexes
+        -- specOverrides with tostring(playerSpecID), and the options tree
+        -- writes string keys too.
+        if type(t.specOverrides["1473"]) ~= "table" then
+            t.specOverrides["1473"] = { preset = "none", _present = true }
         end
     end
 end

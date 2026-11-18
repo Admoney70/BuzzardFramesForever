@@ -48,6 +48,7 @@ local UnitClassBase         = UnitClassBase
 local GetUnitAuraBySpellID  = C_UnitAuras and C_UnitAuras.GetUnitAuraBySpellID
 local GetSpellTexture       = C_Spell and C_Spell.GetSpellTexture
 local C_Timer_After         = C_Timer and C_Timer.After
+local IS_FOREVER            = BF.isForever -- [FOREVER]
 
 -- ============================================================
 -- MODULE STATE
@@ -204,6 +205,21 @@ function trackerProto:AddSpellId(id)
         end
         -- Table form implies per-target-class variants (Evoker pattern).
         self.resolveSpellID = EvokerResolver
+        -- [FOREVER] begin
+        -- WoW Forever: a table is a buff's RANK set (Mark of the Wild r1..r7 +
+        -- Gift of the Wild), present when the unit carries ANY of them --
+        -- Grid2's missing-buff early-break loop (Forever/Forever_SpellData.lua).
+        if IS_FOREVER then
+            self.resolveSpellID = BF.Forever.MakeAnyOfSetResolver(id)
+            -- The icon: the set mixes the single-target buff with its group
+            -- version (Mark vs Gift of the Wild), which have DIFFERENT icons,
+            -- so an arbitrary member is not good enough. The ordered list's
+            -- first ID is the single-target buff's highest rank.
+            local order = BF.Forever.RAID_BUFF_ORDER_BY_SET
+            local list = order and order[id]
+            self.textureSpellID = list and list[1] or nil
+        end
+        -- [FOREVER] end
     end
 end
 
@@ -257,8 +273,9 @@ local function ResolveTexture(tracker)
     -- next() on a hash set returns one arbitrary key. For missing-buff
     -- trackers all spellIds in a set share the same icon family (e.g.
     -- Evoker Blessing of the Bronze variants all use the same icon), so
-    -- any of them works.
-    local representativeId = next(tracker.spellIds)
+    -- any of them works. WoW Forever sets a fixed one (AddSpellId): its sets
+    -- mix single-target and group buffs, whose icons differ.
+    local representativeId = tracker.textureSpellID or next(tracker.spellIds)
     if not representativeId then return nil end
     return GetSpellTexture(representativeId)
 end

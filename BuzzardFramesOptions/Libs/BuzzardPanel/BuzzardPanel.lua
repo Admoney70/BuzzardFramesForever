@@ -43,7 +43,7 @@ local ADDON, ns = ...
 -- UP (the pre-release run counted 2..45, all below 100), or an installed
 -- older copy would beat a newer one. Keep it in step with the Version
 -- line in BuzzardPanel.toc.
-local MAJOR, MINOR = "BuzzardPanel-1.0", 101
+local MAJOR, MINOR = "BuzzardPanel-1.0", 111
 
 assert(LibStub, MAJOR .. " requires LibStub")
 local Panel, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)

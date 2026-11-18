@@ -63,7 +63,8 @@ end
 -- all three -- why table identity is the scope, why weak keys and the
 -- generation key cover two different section-table lifetimes, and why the
 -- generation key rather than the push is what closes the staleness window --
--- is written out once at Indicators/StatusText_Overlay.lua:197-236 and is not
+-- is written out once at the SECTION-TABLE CACHE KEYS comment in
+-- Indicators/StatusText_Overlay.lua and is not
 -- repeated in every indicator. In-tree precedent: BFStatus.lua:993-1005 (scope
 -- key) and Indicators/HealthText.lua:129/:417 (generation key).
 local _blockCacheMeta = { __mode = "k" }
