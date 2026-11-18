@@ -177,9 +177,14 @@ function F.SeedBuffList(acp)
     end
 
     local seeds = F.BUFF_LIST_SEEDS
+    -- Fork: the long class buffs (BF.COMBAT_HIDE_SEED_NAMES) are not seeded.
+    -- A Buff List entry renders outside the Buffs preset group, so it would
+    -- stay up in combat; left to the preset group they show out of combat
+    -- and are hidden in combat (BuffsPresetCandidates, BuffsAndContainers).
+    local skip = BF.COMBAT_HIDE_SEED_NAMES or {}
     for i = 1, #seeds do
         local seed = seeds[i]
-        if not held[seed.sid] then
+        if not held[seed.sid] and not skip[seed.name] then
             held[seed.sid] = true
             containers[#containers + 1] = {
                 singleBuff        = true,

@@ -3340,9 +3340,33 @@ end
 -- cfg.excludeSpellIDs is never written to.
 BF.COMBAT_HIDE_BUFFS_LONGER_THAN = 660   -- seconds: above the 10-minute buffs
 local _combatBuffEx = {}
+-- The official Forever Buff List seeds (Forever_BuffList.lua) carry the
+-- client's own extra IDs for these buffs (e.g. Mark of the Wild 364163), so
+-- their IDs are folded into the hide list once, the first time it is used.
+BF.COMBAT_HIDE_SEED_NAMES = {
+    ["Mark of the Wild"] = true, ["Gift of the Wild"] = true,
+    ["Arcane Intellect"] = true, ["Arcane Brilliance"] = true,
+    ["Power Word: Fortitude"] = true, ["Prayer of Fortitude"] = true,
+    ["Divine Spirit"] = true, ["Prayer of Spirit"] = true,
+    ["Shadow Protection"] = true, ["Prayer of Shadow Protection"] = true,
+}
+local _seedIDsMerged = false
+local function CombatHiddenIDs()
+    local hide = BF.COMBAT_HIDDEN_BUFF_IDS
+    if not _seedIDsMerged and hide then
+        _seedIDsMerged = true
+        local seeds = BF.Forever and BF.Forever.BUFF_LIST_SEEDS
+        for _, seed in ipairs(seeds or {}) do
+            if BF.COMBAT_HIDE_SEED_NAMES[seed.name] then
+                for _, id in ipairs(seed.ids or {}) do hide[id] = true end
+            end
+        end
+    end
+    return hide
+end
 local function BuffsPresetCandidates(def, ex)
     if not BF._inCombat then return _mergePresetCandidates(def, ex) end
-    local hide = BF.COMBAT_HIDDEN_BUFF_IDS
+    local hide = CombatHiddenIDs()
     table.wipe(_combatBuffEx)
     if ex then for sid in pairs(ex) do _combatBuffEx[sid] = true end end
     if hide then for sid in pairs(hide) do _combatBuffEx[sid] = true end end
@@ -5222,7 +5246,7 @@ function BF:BuffCombatDiag()
     end
     local get = C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
     if not get then return end
-    local hide = BF.COMBAT_HIDDEN_BUFF_IDS or {}
+    local hide = CombatHiddenIDs() or {}
     for i = 1, 40 do
         local ok, a = pcall(get, "player", i, "HELPFUL")
         if not ok or not a then break end
