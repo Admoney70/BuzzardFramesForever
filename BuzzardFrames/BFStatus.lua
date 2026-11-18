@@ -2075,12 +2075,40 @@ end
 -- ------------------------------------------------------------
 -- Event handlers
 -- ------------------------------------------------------------
-local function CastStart(self, _, unit)
+-- /bf castdebug: prints every cast event for group units with its time, so
+-- a late or missing event can be told apart from a display problem.
+local function CastDebug(event, unit, note)
+	if not BF._castDebug then return end
+	print(("|cff11ace9BF cast|r %.2f %s %s %s"):format(GetTime(), tostring(unit),
+		tostring(event):gsub("UNIT_SPELLCAST_", ""), note or ""))
+end
+function BF:ToggleCastDebug()
+	self._castDebug = not self._castDebug
+	print("|cff11ace9Buzzard Frames|r cast bar debug " .. (self._castDebug and "on" or "off"))
+end
+
+local function CastStart(self, event, unit)
 	local s = GetOrMakeState(unit)
 	s.failed = false
 	s.holdUntil = nil
 	if ReadCast(unit, s) then
 		s.generation = (s.generation or 0) + 1
+		CastDebug(event, unit, "shown")
+	else
+		-- The START event can beat the cast info for another player's cast;
+		-- without a second look the bar would never show for this cast.
+		CastDebug(event, unit, "no cast info yet, retrying")
+		local status = self
+		C_Timer.After(0.05, function()
+			if s.active then return end
+			if ReadCast(unit, s) then
+				s.generation = (s.generation or 0) + 1
+				CastDebug(event, unit, "shown on retry")
+				status:UpdateIndicators(unit)
+			else
+				CastDebug(event, unit, "still no cast info")
+			end
+		end)
 	end
 	self:UpdateIndicators(unit)
 end
@@ -2088,8 +2116,9 @@ end
 -- DELAYED / CHANNEL_UPDATE / EMPOWER_UPDATE: the duration object is
 -- replaced, everything else is unchanged. Re-read but keep the same
 -- generation so the indicator does not redo icon/text/pip work.
-local function CastUpdate(self, _, unit)
+local function CastUpdate(self, event, unit)
 	local s = castState[unit]
+	CastDebug(event, unit)
 	if not s or not s.active then return end
 	ReadCast(unit, s)
 	self:UpdateIndicators(unit)
@@ -2129,7 +2158,8 @@ local function CastStop(self, event, unit, _, _, a, b, c)
 		castID = c
 	end
 	-- Stale STOP for a cast we are no longer showing.
-	if IsStaleCast(s, castID) then return end
+	if IsStaleCast(s, castID) then CastDebug(event, unit, "stale, ignored"); return end
+	CastDebug(event, unit)
 	s.active   = false
 	s.failed   = false
 	s.stages   = nil
@@ -2143,9 +2173,27 @@ local function CastFail(self, event, unit, _, _, a, b)
 	local s = castState[unit]
 	if not s or not s.active then return end
 	local castID = (event == "UNIT_SPELLCAST_FAILED") and a or b
-	if IsStaleCast(s, castID) then return end
+	if IsStaleCast(s, castID) then CastDebug(event, unit, "stale, ignored"); return end
+	CastDebug(event, unit)
 	s.active   = false
 	s.failed   = true      -- indicator applies the hold-then-hide linger
+	s.stages   = nil
+	s.duration = nil
+	self:UpdateIndicators(unit)
+end
+
+-- SUCCEEDED   (unit, castGUID, spellID, castID)
+-- A cast (not a channel: SUCCEEDED fires when a channel STARTS) is over
+-- once it succeeds. STOP normally follows at once; ending the bar here too
+-- keeps it from hanging when another player's STOP arrives late or not at
+-- all.
+local function CastSucceeded(self, event, unit, _, _, castID)
+	local s = castState[unit]
+	if not s or not s.active or s.kind ~= CAST_KIND_CAST then return end
+	if IsStaleCast(s, castID) then return end
+	CastDebug(event, unit)
+	s.active   = false
+	s.failed   = false
 	s.stages   = nil
 	s.duration = nil
 	self:UpdateIndicators(unit)
@@ -2178,6 +2226,7 @@ function CastBarStatus:OnEnable()
 	self:RegisterRosterUnitEvent("UNIT_SPELLCAST_EMPOWER_STOP",      CastStop)
 	self:RegisterRosterUnitEvent("UNIT_SPELLCAST_FAILED",            CastFail)
 	self:RegisterRosterUnitEvent("UNIT_SPELLCAST_INTERRUPTED",       CastFail)
+	self:RegisterRosterUnitEvent("UNIT_SPELLCAST_SUCCEEDED",         CastSucceeded)
 	-- v97 (2026-08-27): same token, new occupant. castState is per TOKEN,
 	-- and a roster shuffle moves the previous occupant's in-flight cast to
 	-- whoever inherits the token: the old caster's STOP arrives on THEIR new
@@ -2203,6 +2252,7 @@ function CastBarStatus:OnDisable()
 	self:UnregisterRosterUnitEvent("UNIT_SPELLCAST_EMPOWER_STOP")
 	self:UnregisterRosterUnitEvent("UNIT_SPELLCAST_FAILED")
 	self:UnregisterRosterUnitEvent("UNIT_SPELLCAST_INTERRUPTED")
+	self:UnregisterRosterUnitEvent("UNIT_SPELLCAST_SUCCEEDED")
 	wipe(castState)
 end
 
