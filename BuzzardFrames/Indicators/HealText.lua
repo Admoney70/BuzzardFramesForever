@@ -284,6 +284,7 @@ local function Debug(...)
 end
 
 local MatchPending   -- defined below TakeCredit
+local ResolveCredit  -- defined below Render
 
 -- The client's own choice of target when a cast names none: a friendly
 -- target, else (auto self-cast) the player.
@@ -356,6 +357,12 @@ local function OnPlayerCast(castGUID, spellID)
     credits[#credits + 1] = credit
     Debug("cast", name, "target", tostring(credit.target), "(" .. tostring(how) .. ")",
           "min", tostring(credit.min))
+    if n == 1 then
+        -- Single-target: collect every heal on the target inside the window
+        -- and show only the biggest once it closes (see ResolveCredit).
+        credit.cands = {}
+        C_Timer.After(CREDIT_WINDOW + 0.05, function() ResolveCredit(credit) end)
+    end
     MatchPending(credit)
 end
 
@@ -374,6 +381,11 @@ local function TryCredit(c, heal)
     if c.target ~= nil and c.target ~= heal.key then return false, "other target" end
     if heal.time > c.expires or heal.time < c.time - PRE_WINDOW then return false, "outside window" end
     if c.min and heal.amount and heal.amount < c.min * 0.9 then return false, "below spell min" end
+    if c.cands then
+        if c.done then return false, "already resolved" end
+        c.cands[#c.cands + 1] = heal
+        return true, "candidate"
+    end
     c.left = c.left - 1
     c.used[heal.key] = true
     c.last = { key = heal.key, time = heal.time, amount = heal.amount }
@@ -389,7 +401,7 @@ local function TakeCredit(heal)
             table.remove(credits, i)
         else
             local ok, reason = TryCredit(c, heal)
-            if ok then return c end
+            if ok then return c, reason end
             why = reason or why
             i = i + 1
         end
@@ -407,6 +419,40 @@ local function Render(heal, credit)
     ForEachFrame(heal.unit, function(f) Show(f, text, heal.raw, heal.crit) end)
 end
 
+-- The window of a single-target cast has closed: of the heals that landed
+-- on its target, the biggest is the cast's own. A HoT tick (the player's or
+-- another healer's) that lands in the same instant is almost always smaller
+-- than a direct heal, so "first heal after the cast" (the old rule) could
+-- show the tick while "biggest heal" does not. Every token that reported the
+-- winning heal (party1 AND target, say) shows it; the rest only show with
+-- Show All Heals on.
+ResolveCredit = function(credit)
+    if credit.done then return end
+    credit.done = true
+    local cands = credit.cands
+    local best
+    for i = 1, #cands do
+        local h = cands[i]
+        if not best or (h.amount and (not best.amount or h.amount > best.amount)) then
+            best = h
+        end
+    end
+    local cfg = Cfg()
+    for i = 1, #cands do
+        local h = cands[i]
+        local same = best and h.time == best.time and h.amount == best.amount
+            and h.key == best.key
+        if same then
+            Debug("heal", h.unit, tostring(h.amount), "-> " .. credit.name,
+                  string_format("(biggest of %d)", #cands))
+            Render(h, credit)
+        elseif cfg and cfg.showHoTs then
+            Render(h, nil)
+        end
+    end
+    if #cands == 0 then Debug("cast", credit.name, "no heal landed on its target") end
+end
+
 -- A cast just went off: its result may already be waiting.
 MatchPending = function(credit)
     local now = GetTime()
@@ -417,8 +463,10 @@ MatchPending = function(credit)
             table.remove(pending, i)
         elseif TryCredit(credit, heal) then
             table.remove(pending, i)
-            Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)")
-            Render(heal, credit)
+            if not credit.cands then
+                Debug("heal", heal.unit, tostring(heal.amount), "-> " .. credit.name, "(arrived first)")
+                Render(heal, credit)
+            end
         else
             i = i + 1
         end
@@ -439,7 +487,11 @@ local function OnUnitCombat(unit, action, descriptor, amount)
     -- No way to tell a HoT tick from a direct heal, or whose heal it was,
     -- except by matching it to one of the player's own direct-heal casts.
     local credit, why = TakeCredit(heal)
-    if credit then
+    if credit and why == "candidate" then
+        -- Shown (or not) when the cast's window closes.
+        Debug("heal", unit, tostring(heal.amount), "candidate for " .. credit.name,
+              string_format("dt %.2f", heal.time - credit.time))
+    elseif credit then
         Debug("heal", unit, tostring(heal.amount), "-> " .. credit.name,
               string_format("dt %.2f", heal.time - credit.time))
         Render(heal, credit)
