@@ -45,6 +45,10 @@ BF.healTextDefaults = {
     profile = {
         enabled      = true,
         showHoTs     = false,
+        -- Accurate: wait out a single-target cast's window and show the
+        -- biggest heal on its target (filters HoT ticks, ~0.5s delay).
+        -- Off: show the first matching heal at once.
+        accurate     = true,
         showSpell    = false,
         biggerCrits  = true,
         raidParty    = true,
@@ -357,7 +361,8 @@ local function OnPlayerCast(castGUID, spellID)
     credits[#credits + 1] = credit
     Debug("cast", name, "target", tostring(credit.target), "(" .. tostring(how) .. ")",
           "min", tostring(credit.min))
-    if n == 1 then
+    local cfg = Cfg()
+    if n == 1 and (not cfg or cfg.accurate ~= false) then
         -- Single-target: collect every heal on the target inside the window
         -- and show only the biggest once it closes (see ResolveCredit).
         credit.cands = {}

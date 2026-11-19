@@ -111,6 +111,14 @@ function BuzzardFramesOptions:HealTextPage()
                     .. "casts.\n\nOn: every heal on the unit shows, from any "
                     .. "healer, HoT ticks included -- the game does not say "
                     .. "whose heal it was or whether it was a tick."),
+                Switch("accurate", "Accurate Healing",
+                    "On: after each single-target heal, wait about half a "
+                    .. "second and show the biggest heal that landed on your "
+                    .. "target. This keeps a HoT tick that lands at the same "
+                    .. "moment from showing in place of your heal.\n\nOff: "
+                    .. "show the first heal that lands on your target right "
+                    .. "away. Faster, but a HoT tick can occasionally show "
+                    .. "instead."),
                 Switch("showSpell", "Show Spell Name",
                     "Put the spell name in front of the number (your own "
                     .. "direct heals only)."),
