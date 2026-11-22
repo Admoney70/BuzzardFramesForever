@@ -673,6 +673,9 @@ function BuzzardFramesOptions:BuildRoutes(app)
         -- Floating heal numbers (Pages_HealText.lua). One page, no children.
         { id = "healText", title = "Heal Text", sectionKey = "healText",
             page = function() return self:HealTextPage() end },
+        -- Interrupted-cast alerts (Pages_InterruptAlert.lua).
+        { id = "interruptAlert", title = "Interrupt Alerts", sectionKey = "interruptAlert",
+            page = function() return self:InterruptAlertPage() end },
         -- Its five pages (General, Profile Management, Themes, Export,
         -- Import) are RAIL children -- no navigator of its own, so the
         -- rail lists them under the section and no strip repeats them:

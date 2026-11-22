@@ -410,8 +410,6 @@ function BF:OnChatCommand(input)
     -- sentinel resolution it inspected are gone from
     -- AuraCustomizations/AuraCustomizations.lua, so the command had nothing
     -- left to report. "/bf debugauras" below still dumps raw aura secrecy.
-    elseif input == "kickprobe" then
-        self:ToggleKickProbe()
     elseif input == "castdebug" then
         self:ToggleCastDebug()
     elseif input == "buffcombat" then

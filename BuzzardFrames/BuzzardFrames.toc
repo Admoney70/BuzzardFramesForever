@@ -4,7 +4,7 @@
 ## Notes: Blizzard-style Party, Raid and Unit Frames
 ## Author: Serina
 ## Version: 5.4.3
-## SavedVariables: BuzzardFramesDB, BuzzardFramesUnitFramesDB, BuzzardFramesAuraCustomizationsDB, BuzzardFramesCustomFrameGroupsDB, BuzzardFramesRaidPartyFramesDB, BuzzardFramesIncomingCastsDB, BuzzardFramesMenuModeDB, BuzzardFramesHealTextDB
+## SavedVariables: BuzzardFramesDB, BuzzardFramesUnitFramesDB, BuzzardFramesAuraCustomizationsDB, BuzzardFramesCustomFrameGroupsDB, BuzzardFramesRaidPartyFramesDB, BuzzardFramesIncomingCastsDB, BuzzardFramesMenuModeDB, BuzzardFramesHealTextDB, BuzzardFramesInterruptDB
 ## X-oUF: BuzzardFrames_oUF
 ## X-Curse-Project-ID: 1461828
 # BuzzardFramesOptions is THE options panel, shipped alongside this addon
@@ -116,7 +116,6 @@ Statuses\Offline.lua
 Statuses\Level.lua
 BFLayout.lua
 PetAttach.lua
-InterruptProbe.lua
 Auras\Auras.lua
 Auras\AuraConfig.lua
 Auras\AuraTooltip.lua
@@ -136,6 +135,7 @@ Indicators\LevelText.lua
 Indicators\ReducedMaxHealthText.lua
 Indicators\StatusText_Overlay.lua
 Indicators\HealText.lua
+Indicators\InterruptAlert.lua
 Indicators\RoleIcon.lua
 Indicators\RaidTargetIcon.lua
 Indicators\PingIndicator.lua

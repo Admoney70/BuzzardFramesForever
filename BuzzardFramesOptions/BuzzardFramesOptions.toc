@@ -114,6 +114,7 @@ Pages_UFLayouts.lua
 # Incoming Casts
 Pages_IncomingCasts.lua
 Pages_HealText.lua
+Pages_InterruptAlert.lua
 
 # Profiles. Pages_ProfilesShared.lua first: it carries the import pipeline
 # (the legacy decoders, the decode/import state, the copy window) that the
