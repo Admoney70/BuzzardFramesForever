@@ -398,6 +398,24 @@ end
 -- skip its Show(), and the health text would stay invisible until something
 -- unrelated reset it. IsShown() is a plain C getter, not a secret value, and
 -- it is also immune to frame recycling -- no reset hook to remember anywhere.
+-- Deficit format: a step color curve per text color -- the color itself
+-- below 100% health, transparent at 100% -- so "-0" can be hidden while the
+-- health values are secret. Cached per color.
+local _deficitCurves = {}
+local function DeficitCurve(r, g, b, a)
+	if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and Enum.LuaCurveType) then return nil end
+	local key = ("%.3f,%.3f,%.3f,%.3f"):format(r, g, b, a or 1)
+	local curve = _deficitCurves[key]
+	if curve == nil then
+		curve = C_CurveUtil.CreateColorCurve()
+		curve:SetType(Enum.LuaCurveType.Step)
+		curve:AddPoint(0, CreateColor(r, g, b, a or 1))
+		curve:AddPoint(1, CreateColor(r, g, b, 0))
+		_deficitCurves[key] = curve
+	end
+	return curve
+end
+
 local function HideText(fs)
 	if fs:IsShown() then
 		fs:SetText("")
@@ -458,17 +476,19 @@ function HealthText:Update(parent, unit)
 	-- Color: always set the normal health text color (mirrors NameText pattern).
 	-- This ensures the color is restored every Update cycle, so transient
 	-- overrides (e.g. reduced max health) don't persist once the status clears.
+	local tr, tg, tb, ta
 	if cfg.adjustColor and cfg.classColor then
 		local className = healthStatus:GetClass(unit)
 		if className and BF.classColors and BF.classColors[className] then
 			local c = BF.classColors[className]
-			fs:SetTextColor(c.r, c.g, c.b, c.a or 1)
+			tr, tg, tb, ta = c.r, c.g, c.b, c.a or 1
 		end
 	elseif cfg.adjustColor then
-		fs:SetTextColor(cfg.colR, cfg.colG, cfg.colB, cfg.colA)
+		tr, tg, tb, ta = cfg.colR, cfg.colG, cfg.colB, cfg.colA
 	else
-		fs:SetTextColor(1, 1, 1)
+		tr, tg, tb, ta = 1, 1, 1, 1
 	end
+	if tr then fs:SetTextColor(tr, tg, tb, ta) end
 
 	-- Format: read values from health status
 	local fmt = cfg.format
@@ -478,6 +498,24 @@ function HealthText:Update(parent, unit)
 	elseif fmt == "current" then
 		baseText = healthStatus:GetCurrentText(unit)
 	elseif fmt == "deficit" then
+		-- Nothing missing: no text, rather than "-0".
+		local missing = healthStatus:GetMissing(unit)
+		if missing ~= nil and not issecretvalue(missing) then
+			if missing <= 0 then
+				HideText(fs)
+				return
+			end
+		elseif tr then
+			-- Secret (in combat): the same text color, fully transparent at
+			-- 100% health, through a step curve the engine evaluates.
+			local curve = DeficitCurve(tr, tg, tb, ta)
+			if curve then
+				local ok, color = pcall(UnitHealthPercent, unit, false, curve)
+				if ok and color ~= nil then
+					pcall(fs.SetTextColor, fs, color:GetRGBA())
+				end
+			end
+		end
 		baseText = "-" .. healthStatus:GetMissingText(unit)
 	end
 
