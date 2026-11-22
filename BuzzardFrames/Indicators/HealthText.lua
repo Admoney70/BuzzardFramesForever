@@ -398,24 +398,6 @@ end
 -- skip its Show(), and the health text would stay invisible until something
 -- unrelated reset it. IsShown() is a plain C getter, not a secret value, and
 -- it is also immune to frame recycling -- no reset hook to remember anywhere.
--- Deficit format: a step color curve per text color -- the color itself
--- below 100% health, transparent at 100% -- so "-0" can be hidden while the
--- health values are secret. Cached per color.
-local _deficitCurves = {}
-local function DeficitCurve(r, g, b, a)
-	if not (C_CurveUtil and C_CurveUtil.CreateColorCurve and Enum.LuaCurveType) then return nil end
-	local key = ("%.3f,%.3f,%.3f,%.3f"):format(r, g, b, a or 1)
-	local curve = _deficitCurves[key]
-	if curve == nil then
-		curve = C_CurveUtil.CreateColorCurve()
-		curve:SetType(Enum.LuaCurveType.Step)
-		curve:AddPoint(0, CreateColor(r, g, b, a or 1))
-		curve:AddPoint(1, CreateColor(r, g, b, 0))
-		_deficitCurves[key] = curve
-	end
-	return curve
-end
-
 local function HideText(fs)
 	if fs:IsShown() then
 		fs:SetText("")
@@ -505,18 +487,15 @@ function HealthText:Update(parent, unit)
 				HideText(fs)
 				return
 			end
-		elseif tr then
-			-- Secret (in combat): the same text color, fully transparent at
-			-- 100% health, through a step curve the engine evaluates.
-			local curve = DeficitCurve(tr, tg, tb, ta)
-			if curve then
-				local ok, color = pcall(UnitHealthPercent, unit, false, curve)
-				if ok and color ~= nil then
-					pcall(fs.SetTextColor, fs, color:GetRGBA())
-				end
-			end
+			baseText = "-" .. AbbreviateLargeNumbers(missing)
+		elseif C_StringUtil and C_StringUtil.TruncateWhenZero and C_StringUtil.WrapString then
+			-- Secret (in combat): the engine blanks a zero, and WrapString
+			-- adds the "-" only to a non-empty string (oUF's [missinghp] tag
+			-- does the same).
+			baseText = C_StringUtil.WrapString(C_StringUtil.TruncateWhenZero(missing), "-", "")
+		else
+			baseText = "-" .. healthStatus:GetMissingText(unit)
 		end
-		baseText = "-" .. healthStatus:GetMissingText(unit)
 	end
 
 	-- Append reduced max health text if option is enabled and target is health
