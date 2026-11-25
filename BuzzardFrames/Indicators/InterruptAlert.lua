@@ -131,10 +131,24 @@ local function VisitFrames(fn)
     end
 end
 
+-- PERF: straight from BF.frames_of_unit (rawget: a plain read creates an
+-- entry), so an event for a unit with no group frame -- every enemy
+-- nameplate's cast -- costs one table lookup.
 local function ForEachFrame(unit, fn)
-    VisitFrames(function(frame)
-        if frame and frame:IsVisible() and FrameUnit(frame) == unit then fn(frame) end
-    end)
+    local fou = BF.frames_of_unit
+    local bucket = fou and rawget(fou, unit)
+    if bucket then
+        for frame in next, bucket do
+            if frame:IsVisible() then fn(frame) end
+        end
+    end
+    local twins = BF.twinFrames
+    if twins then
+        for i = 1, #twins do
+            local t = twins[i]
+            if t._bf_twinActive and t:IsVisible() and FrameUnit(t) == unit then fn(t) end
+        end
+    end
 end
 
 -- ── Events ────────────────────────────────────────────────────
@@ -154,6 +168,8 @@ local function OnInterrupted(unit, spellID, interruptedBy, how)
     Debug(unit, how, "spell", issecretvalue(spellID) and "<secret>" or tostring(spellID),
           "by", interruptedBy == nil and "nil"
               or (issecretvalue(interruptedBy) and "<secret>" or tostring(interruptedBy)))
+    IA.active = IA.active or {}
+    IA.active[unit] = true
     ForEachFrame(unit, function(f) Show(f, spellID) end)
     if cfg.playSound and SOUNDKIT then
         PlaySound(SOUNDKIT.RAID_WARNING or 8959, "Master")
@@ -171,8 +187,11 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
         local _, spellID, interruptedBy = ...
         if interruptedBy ~= nil then OnInterrupted(unit, spellID, interruptedBy, "channel") end
     elseif event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_CHANNEL_START" then
-        -- Casting again: the lockout is over.
-        if unit then ForEachFrame(unit, Clear) end
+        -- Casting again: the lockout is over. Only while an alert is up.
+        if unit and IA.active and IA.active[unit] then
+            IA.active[unit] = nil
+            ForEachFrame(unit, Clear)
+        end
     elseif event == "PLAYER_LOGIN" then
         IA:Init()
     end

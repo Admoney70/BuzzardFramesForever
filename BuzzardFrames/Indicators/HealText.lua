@@ -180,15 +180,46 @@ end
 -- Calls fn(frame) for every shown frame on exactly this unit token.
 -- UNIT_COMBAT fires once per token naming the unit (party1 AND target), so
 -- an exact match shows each heal once per frame, never twice.
+-- PERF: the group frames come from BF.frames_of_unit (the addon's own
+-- unit -> frames map), not a walk of every header child; twins and the six
+-- oUF frames are few. rawget: that map creates an entry on a plain read.
 local function ForEachFrame(unit, fn)
     local cfg = Cfg()
-    local function test(frame)
-        if frame and frame:IsVisible() and FrameUnit(frame) == unit then
-            fn(frame)
+    if cfg.raidParty then
+        local fou = BF.frames_of_unit
+        local bucket = fou and rawget(fou, unit)
+        if bucket then
+            for frame in next, bucket do
+                if frame:IsVisible() then fn(frame) end
+            end
+        end
+        local twins = BF.twinFrames
+        if twins then
+            for i = 1, #twins do
+                local t = twins[i]
+                if t._bf_twinActive and t:IsVisible() and FrameUnit(t) == unit then fn(t) end
+            end
         end
     end
-    VisitFrames(cfg, test)
+    if cfg.unitFrames then
+        for i = 1, #OUF_FRAME_NAMES do
+            local f = _G[OUF_FRAME_NAMES[i]]
+            if f and f:IsVisible() and FrameUnit(f) == unit then fn(f) end
+        end
+    end
 end
+
+-- PERF: UNIT_COMBAT fires for every unit token with every hit and heal --
+-- each enemy nameplate included. Only the tokens a frame here can show are
+-- worth any work; the answer per token string is cached.
+local relevantUnit = setmetatable({}, { __index = function(t, unit)
+    local ok = unit == "player" or unit == "pet" or unit == "target"
+        or unit == "focus" or unit == "targettarget" or unit == "focustarget"
+        or unit:find("^party%d$") ~= nil or unit:find("^partypet%d$") ~= nil
+        or unit:find("^raid%d+$") ~= nil or unit:find("^raidpet%d+$") ~= nil
+    t[unit] = ok
+    return ok
+end })
 
 -- ── UNIT_COMBAT helpers: direct-heal credits ──
 
@@ -479,7 +510,7 @@ MatchPending = function(credit)
 end
 
 local function OnUnitCombat(unit, action, descriptor, amount)
-    if action ~= "HEAL" or not unit then return end
+    if action ~= "HEAL" or not unit or not relevantUnit[unit] then return end
     local cfg = Cfg()
     local plain = Plain(amount) and type(amount) == "number"
     if plain and amount <= 0 then return end
@@ -502,7 +533,9 @@ local function OnUnitCombat(unit, action, descriptor, amount)
         Render(heal, credit)
     elseif cfg.showHoTs then
         Render(heal, nil)
-    else
+    elseif lastSent then
+        -- Held only while one of the player's casts is in flight: that is
+        -- the one case its heal can arrive before the cast's success event.
         Debug("heal", unit, tostring(heal.amount), "held:", why)
         pending[#pending + 1] = heal
         while #pending > 40 do table.remove(pending, 1) end

@@ -127,7 +127,12 @@ ev:RegisterEvent("GROUP_ROSTER_UPDATE")
 ev:RegisterEvent("UNIT_PET")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
-ev:SetScript("OnEvent", function(_, event)
+ev:SetScript("OnEvent", function(_, event, unit)
+    -- UNIT_PET fires for every pet owner the client knows of; only the
+    -- player's and the party's pets are on these frames.
+    if event == "UNIT_PET" and not (unit == "player" or (unit and unit:find("^party%d$"))) then
+        return
+    end
     if event == "PLAYER_REGEN_ENABLED" then
         if not pending then return end
         pending = false
